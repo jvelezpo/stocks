@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   formatMarketDateTime,
   getMarketSession,
@@ -61,7 +62,8 @@ function runStockInfo(state: SchedulerState): void {
   state.running = true;
   log("Starting stock-info.ts");
 
-  const child = spawn(process.execPath, ["--env-file=.env", "stock-info.ts"], {
+  const args = existsSync(".env") ? ["--env-file=.env", "stock-info.ts"] : ["stock-info.ts"];
+  const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
     env: process.env,
     stdio: "inherit",
