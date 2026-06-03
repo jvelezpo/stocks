@@ -139,3 +139,4 @@ npm run build        # production build
 - The app creates the required Turso tables automatically on startup.
 - HFT output is stored as structured JSON, then rendered as a human-readable decision panel in the UI.
 - This project is for monitoring and decision support. It is not financial advice.
+
