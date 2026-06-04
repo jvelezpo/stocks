@@ -225,20 +225,21 @@ function registerCleanup(state: SchedulerState): void {
   });
 }
 
-export function startStockInfoScheduler(): void {
+export function startStockInfoScheduler(): SchedulerState {
   if (process.env.NEXT_PHASE === "phase-production-build") {
-    return;
+    null;
   }
 
   const state = schedulerState();
 
   if (state.started) {
-    return;
+    null;
   }
 
   state.started = true;
   registerCleanup(state);
   syncMarketSchedule(state, "startup");
+  return state;
 }
 
 export function stopStockInfoScheduler(reason = "shutdown"): void {
