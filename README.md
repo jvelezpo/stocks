@@ -1,6 +1,6 @@
 # Signal Desk
 
-Signal Desk is a small stock monitoring dashboard built with Next.js, Turso, Puppeteer, and optional OpenRouter-powered analysis.
+Signal Desk is a small stock monitoring dashboard built with Next.js, Turso, Puppeteer, and optional Opencode CLI-powered analysis.
 
 It collects quote snapshots from Yahoo Finance, stores them in Turso, captures page text for analysis, and presents a dashboard with recent prices, trend charts, analyst-style recommendations, and high-frequency trading signals.
 
@@ -11,7 +11,7 @@ It collects quote snapshots from Yahoo Finance, stores them in Turso, captures p
 - Floating AI chat on each symbol page with persistent per-browser sessions and conversation history
 - Interactive recent-captures chart with hover tooltips
 - Background quote collector that runs during regular US market hours
-- Optional OpenRouter LLM analysis for longer-form recommendations and HFT-style signals
+- Optional Opencode CLI analysis for longer-form recommendations and HFT-style signals
 - Turso-backed persistence for quote history, captured page documents, and LLM output
 - Admin-only symbol management at `/admin/symbols` (CRUD + active toggle, stored in the `tracked_symbols` table)
 - Five-minute r/wallstreetbets monitor for new posts mentioning `buy`, `sell`, `short`, or `long`
@@ -24,14 +24,14 @@ It collects quote snapshots from Yahoo Finance, stores them in Turso, captures p
 - Tailwind CSS
 - Turso / libSQL
 - Puppeteer
-- OpenRouter
+- Opencode CLI (`opencode run` with `muse-spark-1.3-contributor-free`)
 
 ## Prerequisites
 
 - Node.js compatible with the project `.nvmrc`
 - npm
 - A Turso database URL and auth token
-- Optional: an OpenRouter API key and model
+- Optional: the Opencode CLI installed and reachable as `opencode` (defaults to `muse-spark-1.3-contributor-free`)
 
 ## Setup
 
@@ -55,14 +55,15 @@ Edit `.env`:
 SYMBOLS=IONQ,NVDA
 STOCK_INFO_RUN_WHEN_MARKET_CLOSED=false
 
-OPENROUTER_API_KEY=sk-key
-OPENROUTER_MODEL=openai/gpt-4.1-mini
+# Analysis runs through the local `opencode` CLI; no API key is needed.
+OPENCODE_MODEL=muse-spark-1.3-contributor-free
+# OPENCODE_CLI_PATH=opencode
 
 TURSO_DATABASE_URL=libsql://your-database.turso.io
 TURSO_AUTH_TOKEN=your_turso_database_auth_token
 ```
 
-Leave `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` unset to skip AI analysis; quote capture and matching Reddit post collection still run.
+LLM analysis runs through the local Opencode CLI (`opencode run --format json`). No API key is needed; the Zen free tier works from within OpenCode, which is why direct Responses API calls were replaced. Set `OPENCODE_DISABLED=true` or `OPENCODE_MODEL=none` to skip AI analysis; quote capture and matching Reddit post collection still run. `OPENCODE_MODEL` defaults to `muse-spark-1.3-contributor-free` (Muse Spark 1.3 Free).
 
 ## Environment Variables
 
@@ -72,8 +73,9 @@ Leave `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` unset to skip AI analysis; quo
 | `STOCK_INFO_RUN_WHEN_MARKET_CLOSED` | No | Set to `true` to keep the collector running outside regular US market hours. |
 | `TURSO_DATABASE_URL` | Yes | Turso/libSQL database URL. |
 | `TURSO_AUTH_TOKEN` | Yes | Turso database auth token. |
-| `OPENROUTER_API_KEY` | No | Enables LLM analysis when paired with `OPENROUTER_MODEL`. |
-| `OPENROUTER_MODEL` | No | OpenRouter model id used for all LLM analysis. |
+| `OPENCODE_MODEL` | No | Opencode model id used for all LLM analysis via the local CLI. Defaults to `muse-spark-1.3-contributor-free` (Muse Spark 1.3 Free). Use `opencode/provider-model` format or a short id (short ids are prefixed with `opencode/`). |
+| `OPENCODE_CLI_PATH` | No | Path to the Opencode CLI binary. Defaults to `opencode`. |
+| `OPENCODE_DISABLED` | No | Set to `true` (or `OPENCODE_MODEL=none`) to skip LLM analysis. |
 | `LLM_DOCUMENT_MAX_CHARS` | No | Max captured page text sent to analysis. Defaults to `50000`. |
 | `LLM_MAX_OUTPUT_TOKENS` | No | Max analysis output tokens. Defaults to `1200`. |
 | `LLM_TIMEOUT_MS` | No | LLM request timeout. Defaults to `60000`. |
@@ -137,7 +139,7 @@ The same startup hook starts an independent Reddit scheduler. It runs immediatel
 1. `stock-info.ts` loads the active symbols from the `tracked_symbols` table (managed at `/admin/symbols`), opens Yahoo Finance pages with Puppeteer.
 2. It extracts quote data and selected quote stats.
 3. It stores quote history and captured page text in Turso.
-4. If OpenRouter env vars are present, it runs:
+4. Unless disabled (`OPENCODE_DISABLED=true` or `OPENCODE_MODEL=none`), it runs via the local Opencode CLI:
    - `prompts/prompt.md` for general stock analysis
    - `prompts/hft.md` for HFT-style BUY/SELL/HOLD signals
 5. The Next.js dashboard reads from Turso and renders the latest summaries and symbol detail pages.
@@ -147,10 +149,10 @@ For Reddit sentiment:
 1. `reddit-sentiment.ts` opens r/wallstreetbets with Puppeteer and extracts the newest rendered posts.
 2. It validates the extracted content and stores previously unseen posts whose title or body contains a monitored keyword as a whole word.
 3. New matching posts enter a durable analysis queue. Stale work is reclaimed and failed AI calls are retried up to three times.
-4. Pending posts are sent to the configured OpenRouter model in batches and the structured sentiment result is stored separately.
+4. Pending posts are sent to the configured Opencode CLI model in batches and the structured sentiment result is stored separately.
 5. The dashboard renders completed batch-wide summaries and filters them by contained keyword or analysis timeframe.
 
-If OpenRouter is not configured, matching Reddit posts are still stored but no sentiment summary is generated for that run.
+If the Opencode CLI is disabled, matching Reddit posts are still stored but no sentiment summary is generated for that run.
 
 For stock chat, open any `/stocks/{symbol}` page and use the floating chat button. Sessions and messages are stored in Turso and scoped to an anonymous, HttpOnly browser cookie. Each AI turn receives the latest stored data represented by that symbol view, plus the completed conversation history. The composer stays locked while a reply is in progress.
 

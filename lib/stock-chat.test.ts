@@ -6,8 +6,11 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
   const databasePath = `/private/tmp/stock-chat-test-${process.pid}-${Date.now()}.db`;
   process.env.TURSO_DATABASE_URL = `file:${databasePath}`;
   process.env.TURSO_AUTH_TOKEN = "test-token";
-  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-  process.env.OPENROUTER_MODEL = "test/chat-model";
+  // The chat now runs through the local OpenCode CLI, so no API key is needed.
+  delete process.env.OPENCODE_API_KEY;
+  process.env.OPENCODE_MODEL = "muse-spark-1.3-contributor-free";
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_MODEL;
   process.env.LLM_TIMEOUT_MS = "5000";
 
   const { ensureStockSchema, turso } = await import("./turso.ts");
@@ -23,7 +26,6 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
     stockChatJson,
   } = await import("./stock-chat.ts");
   const { NextRequest } = await import("next/server.js");
-  const originalFetch = globalThis.fetch;
 
   try {
     await ensureStockSchema();
@@ -98,34 +100,28 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
     const replyReleased = new Promise<void>((resolve) => {
       releaseReply = resolve;
     });
-    let openRouterCallCount = 0;
+    let opencodeCallCount = 0;
 
-    globalThis.fetch = (async (_input, init) => {
-      openRouterCallCount += 1;
-      const body = JSON.parse(String(init?.body)) as {
-        messages?: { role?: string; content?: string }[];
-      };
-      const systemMessage = body.messages?.[0];
+    (globalThis as Record<string, unknown>).__opencodeCliMock = (async (
+      prompt: string,
+      options: { model?: string }
+    ) => {
+      opencodeCallCount += 1;
 
-      assert.equal(systemMessage?.role, "system");
-      assert.match(systemMessage?.content ?? "", /Test Corporation/);
-      assert.match(systemMessage?.content ?? "", /STOCK_VIEW_DATA_START/);
+      assert.equal(options.model, "muse-spark-1.3-contributor-free");
+      assert.match(prompt, /Test Corporation/);
+      assert.match(prompt, /STOCK_VIEW_DATA_START/);
+      assert.match(prompt, /What changed in the latest capture\?/);
       notifyRequestStarted?.();
       await replyReleased;
 
-      return Response.json({
-        id: "chat-response-1",
-        model: "test/chat-model",
-        choices: [
-          {
-            message: {
-              content: "TEST is up 1.5% in the latest stored capture.",
-            },
-          },
-        ],
-        usage: { prompt_tokens: 100, completion_tokens: 12 },
-      });
-    }) as typeof fetch;
+      return {
+        text: "TEST is up 1.5% in the latest stored capture.",
+        sessionId: "chat-cli-session-1",
+        usageJson: JSON.stringify({ input_tokens: 100, output_tokens: 12 }),
+        rawResponseJson: JSON.stringify({ cli: "opencode run" }),
+      };
+    }) as unknown;
 
     const firstTurn = sendChatMessage(visitorHash, "test-network", "TEST", session.id, {
       turnId: "turn-first-0001",
@@ -158,7 +154,7 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
     });
     assert.equal(repeated.userMessage.id, completed.userMessage.id);
     assert.equal(repeated.assistantMessage.id, completed.assistantMessage.id);
-    assert.equal(openRouterCallCount, 1);
+    assert.equal(opencodeCallCount, 1);
 
     const history = await getChatSession(visitorHash, "TEST", session.id);
     assert.equal(history.session.messageCount, 2);
@@ -171,9 +167,9 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
       ]
     );
 
-    globalThis.fetch = (async () => {
+    (globalThis as Record<string, unknown>).__opencodeCliMock = (async () => {
       throw new Error("simulated provider outage");
-    }) as typeof fetch;
+    }) as unknown;
     const originalConsoleError = console.error;
     console.error = () => {};
 
@@ -258,7 +254,7 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
         error.code === "message_too_large"
     );
   } finally {
-    globalThis.fetch = originalFetch;
+    delete (globalThis as Record<string, unknown>).__opencodeCliMock;
     turso.close();
     await unlink(databasePath).catch(() => {});
   }

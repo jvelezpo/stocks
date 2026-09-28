@@ -8,6 +8,11 @@ import type {
 import type { NextRequest } from "next/server";
 import { getStockDetail, type StockDetail } from "./stocks.ts";
 import { ensureStockSchema, turso } from "./turso.ts";
+import {
+  DEFAULT_OPENCODE_MODEL,
+  resolveOpencodeCliPath,
+  runOpencodePrompt,
+} from "./opencode-cli.ts";
 
 const visitorCookieName = "stock_chat_visitor";
 const visitorCookieMaxAgeSeconds = 60 * 60 * 24 * 365;
@@ -119,15 +124,14 @@ type SqlExecutor = {
   execute(statement: InStatement): Promise<ResultSet>;
 };
 
-type OpenRouterConfig = {
-  endpoint: string;
-  apiKey: string;
+type OpencodeConfig = {
   model: string;
+  cliPath: string;
   maxOutputTokens: number;
   timeoutMs: number;
 };
 
-type OpenRouterResult = {
+type OpencodeResult = {
   responseId: string;
   model: string;
   content: string;
@@ -190,11 +194,26 @@ function positiveIntegerEnv(name: string, fallback: number): number {
   return parsed;
 }
 
-function openRouterConfig(): OpenRouterConfig {
-  const apiKey = optionalEnv("OPENROUTER_API_KEY");
-  const model = optionalEnv("OPENROUTER_MODEL");
+function isOpencodeDisabled(model: string): boolean {
+  return ["none", "off", "disabled", "skip"].includes(model.trim().toLowerCase());
+}
 
-  if (!apiKey || !model) {
+function opencodeConfig(): OpencodeConfig {
+  // OPENROUTER_MODEL is kept as a legacy fallback; OPENCODE_MODEL takes precedence.
+  // Chat runs through the local `opencode` CLI (free tier works from within
+  // OpenCode), so no API key or base URL is required.
+  const model =
+    optionalEnv("OPENCODE_MODEL") ||
+    optionalEnv("OPENROUTER_MODEL") ||
+    DEFAULT_OPENCODE_MODEL;
+  const disabled =
+    optionalEnv("OPENCODE_DISABLED").toLowerCase() === "true" ||
+    optionalEnv("OPENCODE_DISABLED") === "1" ||
+    isOpencodeDisabled(model) ||
+    isOpencodeDisabled(optionalEnv("OPENCODE_MODEL")) ||
+    isOpencodeDisabled(optionalEnv("OPENROUTER_MODEL"));
+
+  if (disabled || !model) {
     throw new StockChatError(
       503,
       "chat_not_configured",
@@ -202,13 +221,9 @@ function openRouterConfig(): OpenRouterConfig {
     );
   }
 
-  const baseUrl =
-    optionalEnv("OPENROUTER_BASE_URL") || "https://openrouter.ai/api/v1";
-
   return {
-    apiKey,
     model,
-    endpoint: `${baseUrl.replace(/\/+$/, "")}/chat/completions`,
+    cliPath: resolveOpencodeCliPath(),
     maxOutputTokens: positiveIntegerEnv("LLM_MAX_OUTPUT_TOKENS", 1_200),
     timeoutMs: positiveIntegerEnv("LLM_TIMEOUT_MS", 60_000),
   };
@@ -1336,122 +1351,52 @@ function stockContextPrompt(detail: StockDetail): string {
   ].join("\n");
 }
 
-function collectTextBlocks(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap(collectTextBlocks);
-  }
-
-  if (!isRecord(value)) {
-    return [];
-  }
-
-  const text = typeof value.text === "string" ? [value.text] : [];
-  return text.concat(collectTextBlocks(value.content));
-}
-
-function stringField(value: unknown, key: string): string {
-  return isRecord(value) && typeof value[key] === "string"
-    ? value[key]
-    : "";
-}
-
-function openRouterText(value: unknown): string {
-  if (!isRecord(value)) {
-    return "";
-  }
-
-  if (!Array.isArray(value.choices)) {
-    return collectTextBlocks(value.output).join("\n").trim();
-  }
-
-  return value.choices
-    .flatMap((choice) => {
-      if (!isRecord(choice) || !isRecord(choice.message)) {
-        return [];
-      }
-
-      return collectTextBlocks(choice.message.content);
-    })
-    .join("\n")
-    .trim();
-}
-
-function openRouterError(value: unknown): string {
-  if (!isRecord(value)) {
-    return "";
-  }
-
-  if (typeof value.error === "string") {
-    return value.error;
-  }
-
-  if (isRecord(value.error) && typeof value.error.message === "string") {
-    return value.error.message;
-  }
-
-  return typeof value.message === "string" ? value.message : "";
-}
-
-async function askOpenRouter(
-  config: OpenRouterConfig,
+function buildChatPrompt(
   detail: StockDetail,
   history: { role: ChatMessageRole; content: string }[],
   content: string
-): Promise<OpenRouterResult> {
-  const response = await fetch(config.endpoint, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${config.apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        { role: "system", content: stockContextPrompt(detail) },
-        ...history,
-        { role: "user", content },
-      ],
-      max_tokens: config.maxOutputTokens,
-    }),
-    signal: AbortSignal.timeout(config.timeoutMs),
+): string {
+  const historyText =
+    history.length === 0
+      ? "(no prior messages)"
+      : history
+          .map((message) => `${message.role === "assistant" ? "Assistant" : "User"}: ${message.content}`)
+          .join("\n");
+  return [
+    stockContextPrompt(detail),
+    "",
+    "Conversation history:",
+    historyText,
+    "",
+    `User: ${content}`,
+    "",
+    "Assistant:",
+    "",
+    "Do not use any tools. Answer using the dashboard data above. Reply with the assistant message text only.",
+  ].join("\n");
+}
+
+async function askOpencode(
+  config: OpencodeConfig,
+  detail: StockDetail,
+  history: { role: ChatMessageRole; content: string }[],
+  content: string
+): Promise<OpencodeResult> {
+  // Run through the local OpenCode CLI so the Zen free tier is used from
+  // within OpenCode instead of via a direct Responses API call (which the
+  // free tier rejects with 403). The prompt is piped via stdin.
+  const result = await runOpencodePrompt(buildChatPrompt(detail, history, content), {
+    model: config.model,
+    timeoutMs: config.timeoutMs,
+    cliPath: config.cliPath,
+    maxOutputTokens: config.maxOutputTokens,
   });
-  const responseText = await response.text();
-  let value: unknown = {};
-
-  if (responseText) {
-    try {
-      value = JSON.parse(responseText) as unknown;
-    } catch {
-      value = { text: responseText };
-    }
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      `OpenRouter request failed (${response.status}): ${
-        openRouterError(value) || responseText.slice(0, 300)
-      }`
-    );
-  }
-
-  const answer = openRouterText(value);
-
-  if (!answer) {
-    throw new Error("OpenRouter response did not include text output.");
-  }
 
   return {
-    responseId: stringField(value, "id"),
-    model: stringField(value, "model") || config.model,
-    content: answer,
-    usageJson:
-      isRecord(value) && value.usage !== undefined
-        ? JSON.stringify(value.usage)
-        : "{}",
+    responseId: result.sessionId,
+    model: config.model,
+    content: result.text,
+    usageJson: result.usageJson,
   };
 }
 
@@ -1461,8 +1406,8 @@ async function completeTurn(
   sessionId: string,
   input: ChatMessageInput,
   userMessage: ChatMessage,
-  config: OpenRouterConfig,
-  result: OpenRouterResult
+  config: OpencodeConfig,
+  result: OpencodeResult
 ): Promise<ChatSendResult> {
   const assistantMessage = await writeTransaction(async (transaction) => {
     const timestamp = new Date().toISOString();
@@ -1514,7 +1459,7 @@ async function completeTurn(
           llm_response_id,
           usage_json,
           created_at
-        ) VALUES (?, ?, 'assistant', ?, 'completed', '', 'openrouter', ?, ?, ?, ?)
+        ) VALUES (?, ?, 'assistant', ?, 'completed', '', 'opencode', ?, ?, ?, ?)
         RETURNING
           id,
           session_id,
@@ -1562,7 +1507,7 @@ async function failTurn(
   sessionId: string,
   input: ChatMessageInput,
   userMessage: ChatMessage,
-  config: OpenRouterConfig
+  config: OpencodeConfig
 ): Promise<ChatSendResult> {
   const assistantMessage = await writeTransaction(async (transaction) => {
     const timestamp = new Date().toISOString();
@@ -1604,7 +1549,7 @@ async function failTurn(
       sessionId,
       input.turnId,
       failedAssistantContent,
-      "openrouter",
+      "opencode",
       config.model,
       timestamp
     );
@@ -1643,7 +1588,7 @@ export async function sendChatMessage(
 ): Promise<ChatSendResult> {
   const symbol = normalizeSymbol(rawSymbol);
   const sessionId = validateSessionId(rawSessionId);
-  const config = openRouterConfig();
+  const config = opencodeConfig();
   const claim = await claimTurn(
     visitorHash,
     networkHash,
@@ -1667,16 +1612,16 @@ export async function sendChatMessage(
     };
   }
 
-  let result: OpenRouterResult;
+  let result: OpencodeResult;
 
   try {
     const [detail, history] = await Promise.all([
       assertStockExists(symbol),
       modelHistory(sessionId, claim.userMessage.id),
     ]);
-    result = await askOpenRouter(config, detail, history, input.content);
+    result = await askOpencode(config, detail, history, input.content);
   } catch (error: unknown) {
-    console.error("[stock-chat] OpenRouter request failed.", error);
+    console.error("[stock-chat] Opencode CLI request failed.", error);
     const failedResult = await failTurn(
       visitorHash,
       symbol,

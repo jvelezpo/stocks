@@ -5,6 +5,11 @@ import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { ensureStockSchema, turso } from "./lib/turso.ts";
 import { getCollectorSymbols } from "./lib/symbols.ts";
+import {
+  DEFAULT_OPENCODE_MODEL,
+  resolveOpencodeCliPath,
+  runOpencodePrompt,
+} from "./lib/opencode-cli.ts";
 
 type QuoteStat = {
   label: string;
@@ -20,10 +25,9 @@ type Quote = {
 };
 
 type LlmConfig = {
-  provider: "openrouter";
+  provider: "opencode";
   model: string;
-  apiKey: string;
-  endpoint: string;
+  cliPath: string;
   maxOutputTokens: number;
   timeoutMs: number;
 };
@@ -142,34 +146,37 @@ function parsePositiveIntegerEnv(name: string, fallback: number): number {
   return parsed;
 }
 
-function buildEndpoint(baseUrl: string, path: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}${path}`;
+function isLlmDisabled(model: string): boolean {
+  return ["none", "off", "disabled", "skip"].includes(model.trim().toLowerCase());
 }
 
 function getLlmConfig(): LlmConfig | null {
-  const apiKey = optionalEnv("OPENROUTER_API_KEY");
-  const model = optionalEnv("OPENROUTER_MODEL");
+  // OPENROUTER_MODEL is kept as a legacy fallback; OPENCODE_MODEL takes precedence.
+  // Analysis runs through the local `opencode` CLI (free tier works from
+  // within OpenCode), so no API key or base URL is required.
+  const model =
+    optionalEnv("OPENCODE_MODEL") ||
+    optionalEnv("OPENROUTER_MODEL") ||
+    DEFAULT_OPENCODE_MODEL;
+  const disabled =
+    optionalEnv("OPENCODE_DISABLED").toLowerCase() === "true" ||
+    optionalEnv("OPENCODE_DISABLED") === "1" ||
+    isLlmDisabled(model) ||
+    isLlmDisabled(optionalEnv("OPENCODE_MODEL")) ||
+    isLlmDisabled(optionalEnv("OPENROUTER_MODEL"));
 
-  if (!apiKey && !model) {
+  if (disabled) {
     return null;
   }
 
-  if (!apiKey) {
-    throw new Error("Missing OPENROUTER_API_KEY for LLM analysis.");
-  }
-
   if (!model) {
-    throw new Error("Missing OPENROUTER_MODEL for LLM analysis.");
+    throw new Error("Missing OPENCODE_MODEL for LLM analysis.");
   }
 
   return {
-    provider: "openrouter",
+    provider: "opencode",
     model,
-    apiKey,
-    endpoint: buildEndpoint(
-      optionalEnv("OPENROUTER_BASE_URL") || "https://openrouter.ai/api/v1",
-      "/chat/completions"
-    ),
+    cliPath: resolveOpencodeCliPath(),
     maxOutputTokens: parsePositiveIntegerEnv("LLM_MAX_OUTPUT_TOKENS", 1200),
     timeoutMs: parsePositiveIntegerEnv("LLM_TIMEOUT_MS", 60000),
   };
@@ -249,138 +256,29 @@ function stringField(value: unknown, field: string): string {
   return typeof fieldValue === "string" ? fieldValue : "";
 }
 
-function jsonField(value: unknown, field: string): string {
-  if (!isRecord(value) || value[field] === undefined) {
-    return "{}";
-  }
-
-  return JSON.stringify(value[field]);
-}
-
-function llmErrorMessage(data: unknown): string {
-  if (!isRecord(data)) {
-    return "";
-  }
-
-  const error = data.error;
-
-  if (typeof error === "string") {
-    return error;
-  }
-
-  if (isRecord(error) && typeof error.message === "string") {
-    return error.message;
-  }
-
-  if (typeof data.message === "string") {
-    return data.message;
-  }
-
-  return "";
-}
-
-async function postJson(
-  endpoint: string,
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-  timeoutMs: number
-): Promise<unknown> {
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...headers,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const text = await response.text();
-  let data: unknown = {};
-
-  if (text) {
-    try {
-      data = JSON.parse(text) as unknown;
-    } catch {
-      data = { text };
-    }
-  }
-
-  if (!response.ok) {
-    const message = llmErrorMessage(data) || text.slice(0, 500);
-    throw new Error(`LLM request failed (${response.status}): ${message}`);
-  }
-
-  return data;
-}
-
-function collectTextBlocks(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap(collectTextBlocks);
-  }
-
-  if (!isRecord(value)) {
-    return [];
-  }
-
-  const text = typeof value.text === "string" ? [value.text] : [];
-  return text.concat(collectTextBlocks(value.content));
-}
-
-function extractOpenRouterText(data: unknown): string {
-  if (!isRecord(data)) {
-    return "";
-  }
-
-  if (!Array.isArray(data.choices)) {
-    return collectTextBlocks(data.output).join("\n").trim();
-  }
-
-  return data.choices
-    .map((choice) => {
-      if (!isRecord(choice) || !isRecord(choice.message)) {
-        return "";
-      }
-
-      const content = choice.message.content;
-      return typeof content === "string"
-        ? content
-        : collectTextBlocks(content).join("\n");
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-}
-
 async function runLlmAnalysis(
   config: LlmConfig,
   prompt: string
 ): Promise<LlmResult> {
-  const data = await postJson(
-    config.endpoint,
-    { authorization: `Bearer ${config.apiKey}` },
+  // Run through the local OpenCode CLI so the Zen free tier is used from
+  // within OpenCode instead of via a direct Responses API call (which the
+  // free tier rejects with 403). The prompt is piped via stdin.
+  const result = await runOpencodePrompt(
+    `${prompt}\n\nDo not use any tools. Reply with the requested output only.`,
     {
       model: config.model,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: config.maxOutputTokens,
-    },
-    config.timeoutMs
+      timeoutMs: config.timeoutMs,
+      cliPath: config.cliPath,
+      maxOutputTokens: config.maxOutputTokens,
+    }
   );
-  const analysisText = extractOpenRouterText(data);
-
-  if (!analysisText) {
-    throw new Error("OpenRouter response did not include text output.");
-  }
 
   return {
-    responseId: stringField(data, "id"),
-    model: stringField(data, "model") || config.model,
-    analysisText,
-    rawResponseJson: JSON.stringify(data),
-    usageJson: jsonField(data, "usage"),
+    responseId: result.sessionId,
+    model: config.model,
+    analysisText: result.text,
+    rawResponseJson: result.rawResponseJson,
+    usageJson: result.usageJson,
   };
 }
 
@@ -1281,8 +1179,8 @@ async function main(): Promise<void> {
     );
     log(
       llmConfig
-        ? `LLM enabled: provider=${llmConfig.provider}, model=${llmConfig.model}`
-        : "OPENROUTER_API_KEY and OPENROUTER_MODEL are not set; LLM analysis will be skipped"
+        ? `LLM enabled via Opencode CLI: provider=${llmConfig.provider}, model=${llmConfig.model}`
+        : "Opencode CLI is disabled; LLM analysis will be skipped"
     );
 
     if (symbols.length === 0) {
