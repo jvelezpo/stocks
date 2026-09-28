@@ -5,12 +5,13 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev": "next dev --port 4000",
+    "dev": "next dev --port 5000",
     "build": "next build",
     "dashboard:start": "next start",
+    "reddit:sentiment": "node --env-file=.env reddit-sentiment.ts",
     "stock:info": "node --env-file=.env stock-info.ts",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test lib/reddit-core.test.ts lib/stock-chat.test.ts lib/turso.test.ts"
   },
   "keywords": [],
   "author": "",

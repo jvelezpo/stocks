@@ -226,14 +226,14 @@ function registerCleanup(state: SchedulerState): void {
 }
 
 export function startStockInfoScheduler(): SchedulerState {
-  if (process.env.NEXT_PHASE === "phase-production-build") {
-    null;
-  }
-
   const state = schedulerState();
 
+  if (process.env.NEXT_PHASE === "phase-production-build") {
+    return state;
+  }
+
   if (state.started) {
-    null;
+    return state;
   }
 
   state.started = true;

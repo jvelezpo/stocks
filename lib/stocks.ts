@@ -1,5 +1,10 @@
 import type { Client, InArgs } from "@libsql/client";
-import { ensureStockSchema, turso } from "./turso";
+import { ensureStockSchema, turso } from "./turso.ts";
+import {
+  stockChartBucketSeconds,
+  stockChartRangeDurationSeconds,
+  type StockChartRange,
+} from "./stock-chart.ts";
 
 export type QuoteStat = {
   label: string;
@@ -451,6 +456,83 @@ export function getStockSummaries(): Promise<StockSummary[]> {
     }
 
     return summaryRows.map((row) => mapSummary(row, historyBySymbol.get(row.symbol) ?? []));
+  });
+}
+
+export async function getStockChartHistory(
+  symbol: string,
+  range: StockChartRange
+): Promise<StockHistoryEntry[]> {
+  const normalizedSymbol = symbol.trim().toUpperCase();
+
+  if (!normalizedSymbol) {
+    return [];
+  }
+
+  return withDatabase(async (db) => {
+    const rows = await allRows<StockSummaryRow>(
+      db,
+      `
+        WITH bounded_history AS (
+          SELECT *
+          FROM stock_history
+          WHERE UPPER(symbol) = UPPER(?)
+            AND unixepoch(fetched_at) >= (
+              SELECT MAX(unixepoch(fetched_at))
+              FROM stock_history
+              WHERE UPPER(symbol) = UPPER(?)
+            ) - ?
+        ),
+        ranked_history AS (
+          SELECT
+            bounded_history.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY CAST(unixepoch(fetched_at) / ? AS INTEGER)
+              ORDER BY fetched_at DESC, id DESC
+            ) AS bucket_row
+          FROM bounded_history
+        )
+        SELECT
+          id,
+          symbol,
+          name,
+          price,
+          price_text,
+          change,
+          change_text,
+          change_percent,
+          change_percent_text,
+          previous_close_text,
+          open_text,
+          day_range_text,
+          market_cap_text,
+          volume_text,
+          fetched_at,
+          source_url,
+          stats_json,
+          0 AS history_count,
+          0 AS document_count,
+          0 AS analysis_count,
+          NULL AS latest_recommendation,
+          NULL AS latest_analysis_status,
+          0 AS hft_count,
+          NULL AS latest_hft_decision,
+          NULL AS latest_hft_status,
+          NULL AS latest_hft_confidence,
+          NULL AS latest_hft_market_regime
+        FROM ranked_history
+        WHERE bucket_row = 1
+        ORDER BY fetched_at DESC, id DESC
+      `,
+      [
+        normalizedSymbol,
+        normalizedSymbol,
+        stockChartRangeDurationSeconds(range),
+        stockChartBucketSeconds(range),
+      ]
+    );
+
+    return rows.map(mapHistory);
   });
 }
 

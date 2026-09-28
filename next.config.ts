@@ -4,6 +4,7 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/*": [
       "./stock-info.ts",
+      "./reddit-sentiment.ts",
       "./lib/**/*",
       "./prompts/**/*",
       "./node_modules/puppeteer/**/*",

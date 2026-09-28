@@ -2,6 +2,7 @@
 
 import { Activity, AlertTriangle, Clock } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useMarketTimeZone } from "./MarketTimeZoneContext";
 import { formatMarketDateTime, getMarketSession } from "../lib/market-hours";
 
 type MarketSession = ReturnType<typeof getMarketSession>;
@@ -15,6 +16,7 @@ const closingSoonMs = 15 * 60_000;
 
 export function MarketStatusBadge({ variant = "light" }: MarketStatusBadgeProps) {
   const [session, setSession] = useState<MarketSession>(() => getMarketSession());
+  const { displayTimeZone } = useMarketTimeZone();
   const isDark = variant === "dark";
   const isOpen = session.isOpen;
   const msUntilClose = session.closesAt ? session.closesAt.getTime() - Date.now() : null;
@@ -25,10 +27,10 @@ export function MarketStatusBadge({ variant = "light" }: MarketStatusBadgeProps)
     ? isClosingSoon
       ? `Closes in ${Math.max(1, Math.ceil((msUntilClose ?? 0) / 60_000))} min`
       : `${session.isEarlyClose ? "Early close" : "Closes"} ${
-          session.closesAt ? formatMarketDateTime(session.closesAt) : "today"
+          session.closesAt ? formatMarketDateTime(session.closesAt, displayTimeZone) : "today"
         }`
     : session.nextOpenAt
-      ? `Opens ${formatMarketDateTime(session.nextOpenAt)}`
+      ? `Opens ${formatMarketDateTime(session.nextOpenAt, displayTimeZone)}`
       : session.reason;
   const shellClasses = isDark
     ? isClosingSoon

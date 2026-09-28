@@ -1,7 +1,11 @@
 "use client";
 
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { formatDateTime, formatNumber, toneForChange } from "../lib/format";
+import {
+  stockChartRanges,
+  type StockChartRange,
+} from "../lib/stock-chart";
 import type { StockHistoryEntry } from "../lib/stocks";
 
 type RecentCapturesChartProps = {
@@ -50,6 +54,24 @@ function shortTime(value: string): string {
   }).format(date);
 }
 
+function shortDate(value: string, range: StockChartRange): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  if (range === "1d") {
+    return shortTime(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: range === "1y" ? undefined : "numeric",
+    year: range === "1y" ? "2-digit" : undefined,
+  }).format(date);
+}
+
 function chartId(symbol: string): string {
   return symbol.replace(/[^a-z0-9]/gi, "-").toLowerCase();
 }
@@ -78,13 +100,110 @@ function tooltipPosition(point: ChartPoint): { x: number; y: number } {
 
 export function RecentCapturesChart({ history, symbol }: RecentCapturesChartProps) {
   const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
-  const captures = [...history].reverse();
+  const [chartHistory, setChartHistory] = useState(history);
+  const [activeRange, setActiveRange] = useState<StockChartRange>("1d");
+  const [loadingRange, setLoadingRange] = useState<StockChartRange | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const captures = [...chartHistory].reverse();
+
+  useEffect(() => {
+    if (activeRange === "1d") {
+      setChartHistory(history);
+    }
+  }, [activeRange, history]);
+
+  async function selectRange(range: StockChartRange): Promise<void> {
+    if (range === activeRange || loadingRange !== null) {
+      return;
+    }
+
+    if (range === "1d") {
+      setChartHistory(history);
+      setActiveRange(range);
+      setLoadError("");
+      setHoveredPoint(null);
+      return;
+    }
+
+    setLoadingRange(range);
+    setLoadError("");
+    setHoveredPoint(null);
+
+    try {
+      const response = await fetch(
+        `/api/stocks/${encodeURIComponent(symbol)}/history?range=${range}`,
+        { cache: "no-store" }
+      );
+      const payload = (await response.json()) as {
+        error?: string;
+        history?: StockHistoryEntry[];
+      };
+
+      if (!response.ok || !Array.isArray(payload.history)) {
+        throw new Error(payload.error || "Unable to load chart data.");
+      }
+
+      setChartHistory(payload.history);
+      setActiveRange(range);
+    } catch (error: unknown) {
+      setLoadError(
+        error instanceof Error ? error.message : "Unable to load chart data."
+      );
+    } finally {
+      setLoadingRange(null);
+    }
+  }
+
+  const rangeControls = (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="text-sm text-zinc-500">Time range</div>
+      <div
+        aria-label="Chart time range"
+        className="flex flex-wrap gap-2"
+        role="group"
+      >
+        {stockChartRanges.map((range) => {
+          const isActive = range.value === activeRange;
+
+          return (
+            <button
+              aria-pressed={isActive}
+              className={`rounded-md border px-3 py-1.5 text-sm font-medium transition ${
+                isActive
+                  ? "border-zinc-950 bg-zinc-950 text-white"
+                  : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+              } disabled:cursor-wait disabled:opacity-60`}
+              disabled={loadingRange !== null}
+              key={range.value}
+              onClick={() => void selectRange(range.value)}
+              type="button"
+            >
+              {range.label}
+            </button>
+          );
+        })}
+      </div>
+      <div aria-live="polite" className="min-h-5 w-full text-right text-xs text-zinc-500">
+        {loadingRange
+          ? `Loading ${
+              stockChartRanges.find((range) => range.value === loadingRange)?.label
+            } data...`
+          : null}
+      </div>
+    </div>
+  );
 
   if (captures.length < 2) {
     return (
       <div className="mt-6 border-t border-zinc-100 pt-5">
+        {rangeControls}
+        {loadError ? (
+          <p className="mt-3 text-sm text-red-600" role="alert">
+            {loadError}
+          </p>
+        ) : null}
         <div className="flex h-52 items-center justify-center text-sm text-zinc-500">
-          Need at least two captures to draw a price chart.
+          Not enough captures in this time range to draw a price chart.
         </div>
       </div>
     );
@@ -131,6 +250,12 @@ export function RecentCapturesChart({ history, symbol }: RecentCapturesChartProp
 
   return (
     <div className="mt-6 border-t border-zinc-100 pt-5">
+      {rangeControls}
+      {loadError ? (
+        <p className="mt-3 text-sm text-red-600" role="alert">
+          {loadError}
+        </p>
+      ) : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="text-sm text-zinc-500">Price path</div>
@@ -280,7 +405,7 @@ export function RecentCapturesChart({ history, symbol }: RecentCapturesChartProp
               x={point.x}
               y={height - 14}
             >
-              {shortTime(point.entry.fetchedAt)}
+              {shortDate(point.entry.fetchedAt, activeRange)}
             </text>
           ))}
         </svg>

@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { MarketTimeZoneProvider } from "../components/MarketTimeZoneContext";
+import { SiteFooter } from "../components/SiteFooter";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +15,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="font-sans antialiased">{children}</body>
+      <body className="font-sans antialiased">
+        <MarketTimeZoneProvider>
+          {children}
+          <SiteFooter />
+        </MarketTimeZoneProvider>
+      </body>
     </html>
   );
 }

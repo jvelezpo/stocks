@@ -98,7 +98,7 @@ function optionalEnv(name: string): string {
 function parseSymbolsEnv(): string[] {
   const value = requiredEnv("SYMBOLS");
   const symbols = value.startsWith("[")
-    ? parseSymbolsJson(value)
+    ? parseSymbolsJson(value, "SYMBOLS")
     : value.split(",");
   const normalizedSymbols = symbols
     .map((symbol) => symbol.trim().toUpperCase())
@@ -112,19 +112,53 @@ function parseSymbolsEnv(): string[] {
   return uniqueSymbols;
 }
 
-function parseSymbolsJson(value: string): string[] {
+function parseMacNotificationSymbolsEnv(): Set<string> {
+  const value = optionalEnv("MAC_NOTIFICATION_SYMBOLS");
+
+  if (!value) {
+    return new Set();
+  }
+
+  const symbols = value.startsWith("[")
+    ? parseSymbolsJson(value, "MAC_NOTIFICATION_SYMBOLS")
+    : value.split(",");
+
+  return new Set(
+    symbols
+      .map((symbol) => symbol.trim().toUpperCase())
+      .filter(Boolean)
+  );
+}
+
+function shouldShowFailureNotification(): boolean {
+  const macNotificationSymbols = parseMacNotificationSymbolsEnv();
+
+  if (macNotificationSymbols.size === 0) {
+    return false;
+  }
+
+  try {
+    return parseSymbolsEnv().some((symbol) =>
+      macNotificationSymbols.has(symbol)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parseSymbolsJson(value: string, name: string): string[] {
   let parsed: unknown;
 
   try {
     parsed = JSON.parse(value) as unknown;
   } catch {
     throw new Error(
-      'Env var SYMBOLS must be a comma-separated list or a JSON array like ["IONQ","NVDA"].'
+      `Env var ${name} must be a comma-separated list or a JSON array like ["IONQ","NVDA"].`
     );
   }
 
   if (!Array.isArray(parsed) || parsed.some((symbol) => typeof symbol !== "string")) {
-    throw new Error("Env var SYMBOLS JSON value must be an array of strings.");
+    throw new Error(`Env var ${name} JSON value must be an array of strings.`);
   }
 
   return parsed;
@@ -1035,7 +1069,8 @@ async function processSymbol(
   page: Page,
   symbol: string,
   llmConfig: LlmConfig | null,
-  documentMaxChars: number
+  documentMaxChars: number,
+  macNotificationSymbols: Set<string>
 ): Promise<void> {
   const url = quoteUrl(symbol);
 
@@ -1234,6 +1269,14 @@ async function processSymbol(
   const subtitle = quote.name || "Yahoo Finance";
 
   log(`[${symbol}] Quote result: ${title} - ${message}`);
+  if (!macNotificationSymbols.has(symbol)) {
+    log(
+      `[${symbol}] Skipping macOS banner notification: ` +
+        "symbol not in MAC_NOTIFICATION_SYMBOLS"
+    );
+    return;
+  }
+
   log(`[${symbol}] Sending top-right macOS banner notification`);
   await showNotification(title, subtitle, message || "Quote loaded.")
     .then(() => {
@@ -1258,10 +1301,15 @@ async function main(): Promise<void> {
 
   try {
     const symbols = parseSymbolsEnv();
+    const macNotificationSymbols = parseMacNotificationSymbolsEnv();
     const llmConfig = getLlmConfig();
     const documentMaxChars = parsePositiveIntegerEnv("LLM_DOCUMENT_MAX_CHARS", 50000);
 
     log(`Loaded SYMBOLS=${symbols.join(",")}`);
+    log(
+      `Loaded MAC_NOTIFICATION_SYMBOLS=` +
+        `${Array.from(macNotificationSymbols).join(",") || "(none)"}`
+    );
     log(
       llmConfig
         ? `LLM enabled: provider=${llmConfig.provider}, model=${llmConfig.model}`
@@ -1294,7 +1342,14 @@ async function main(): Promise<void> {
       log(`[${symbol}] Start (${index + 1}/${symbols.length})`);
 
       try {
-        await processSymbol(db, page, symbol, llmConfig, documentMaxChars);
+        await processSymbol(
+          db,
+          page,
+          symbol,
+          llmConfig,
+          documentMaxChars,
+          macNotificationSymbols
+        );
         log(`[${symbol}] End. Total time: ${elapsedSince(symbolStartTime)}`);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1328,6 +1383,8 @@ main().catch(async (error: unknown): Promise<void> => {
   const message = error instanceof Error ? error.message : String(error);
 
   console.error(message);
-  await showNotification("Stock check failed", symbols, message).catch(() => {});
+  if (shouldShowFailureNotification()) {
+    await showNotification("Stock check failed", symbols, message).catch(() => {});
+  }
   process.exitCode = 1;
 });

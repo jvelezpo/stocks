@@ -23,7 +23,8 @@ import {
 } from "../../../lib/format";
 import { RecentCapturesChart } from "../../../components/RecentCapturesChart";
 import { SymbolPageRefresher } from "../../../components/SymbolPageRefresher";
-import { getStockDetail } from "../../../lib/stocks";
+import { StockChat } from "../../../components/StockChat";
+import { getStockChartHistory, getStockDetail } from "../../../lib/stocks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -171,6 +172,7 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
   }
 
   const { latest, history, documents, analyses, hftAnalyses } = detail;
+  const chartHistory = await getStockChartHistory(latest.symbol, "1d");
   const latestAnalysis = analyses[0];
   const latestHftAnalysis = hftAnalyses[0];
   const parsedHftAnalysis = latestHftAnalysis
@@ -254,12 +256,16 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
                   <LineChart className="h-4 w-4 text-emerald-600" />
                   Price trend
                 </div>
-                <h2 className="mt-2 text-2xl font-semibold text-zinc-950">Recent captures ({history.length})</h2>
+                <h2 className="mt-2 text-2xl font-semibold text-zinc-950">Recent captures</h2>
               </div>
               <Sparkline label={latest.symbol} points={latest.priceHistory} />
             </div>
 
-            <RecentCapturesChart history={history} symbol={latest.symbol} />
+            <RecentCapturesChart
+              history={chartHistory}
+              key={latest.symbol}
+              symbol={latest.symbol}
+            />
 
             <div className="mt-6 max-w-full overflow-hidden rounded-lg border border-zinc-200">
               <div className="max-w-full overflow-x-auto">
@@ -597,6 +603,7 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
           </div>
         </aside>
       </section>
+      <StockChat symbol={latest.symbol} />
     </main>
   );
 }

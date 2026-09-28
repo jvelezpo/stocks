@@ -77,9 +77,9 @@ export function getMarketSession(now = new Date()): MarketSession {
   };
 }
 
-export function formatMarketDateTime(date: Date): string {
+export function formatMarketDateTime(date: Date, timeZone = marketTimeZone): string {
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: marketTimeZone,
+    timeZone,
     year: "numeric",
     month: "short",
     day: "numeric",
