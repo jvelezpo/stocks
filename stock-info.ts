@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { ensureStockSchema, turso } from "./lib/turso.ts";
+import { getCollectorSymbols } from "./lib/symbols.ts";
 
 type QuoteStat = {
   label: string;
@@ -81,35 +82,8 @@ type HftParsedResult = {
   marketRegime: string;
 };
 
-function requiredEnv(name: string): string {
-  const value = process.env[name]?.trim();
-
-  if (!value) {
-    throw new Error(`Missing required env var ${name}. Add ${name}=IONQ,NVDA to .env.`);
-  }
-
-  return value;
-}
-
 function optionalEnv(name: string): string {
   return process.env[name]?.trim() || "";
-}
-
-function parseSymbolsEnv(): string[] {
-  const value = requiredEnv("SYMBOLS");
-  const symbols = value.startsWith("[")
-    ? parseSymbolsJson(value, "SYMBOLS")
-    : value.split(",");
-  const normalizedSymbols = symbols
-    .map((symbol) => symbol.trim().toUpperCase())
-    .filter(Boolean);
-  const uniqueSymbols = Array.from(new Set(normalizedSymbols));
-
-  if (uniqueSymbols.length === 0) {
-    throw new Error("Env var SYMBOLS must include at least one symbol.");
-  }
-
-  return uniqueSymbols;
 }
 
 function parseMacNotificationSymbolsEnv(): Set<string> {
@@ -131,19 +105,7 @@ function parseMacNotificationSymbolsEnv(): Set<string> {
 }
 
 function shouldShowFailureNotification(): boolean {
-  const macNotificationSymbols = parseMacNotificationSymbolsEnv();
-
-  if (macNotificationSymbols.size === 0) {
-    return false;
-  }
-
-  try {
-    return parseSymbolsEnv().some((symbol) =>
-      macNotificationSymbols.has(symbol)
-    );
-  } catch {
-    return false;
-  }
+  return parseMacNotificationSymbolsEnv().size > 0;
 }
 
 function parseSymbolsJson(value: string, name: string): string[] {
@@ -1300,12 +1262,19 @@ async function main(): Promise<void> {
   log("Start");
 
   try {
-    const symbols = parseSymbolsEnv();
     const macNotificationSymbols = parseMacNotificationSymbolsEnv();
     const llmConfig = getLlmConfig();
     const documentMaxChars = parsePositiveIntegerEnv("LLM_DOCUMENT_MAX_CHARS", 50000);
 
-    log(`Loaded SYMBOLS=${symbols.join(",")}`);
+    log("Connecting to Turso database");
+    db = await connectDatabase();
+    log("Turso database ready");
+
+    // Symbols are now the DB table `tracked_symbols` (managed at /admin/symbols).
+    // On first run an empty table is seeded once from the legacy SYMBOLS env var.
+    const symbols = await getCollectorSymbols();
+
+    log(`Loaded tracked symbols from DB: ${symbols.join(",") || "(none)"}`);
     log(
       `Loaded MAC_NOTIFICATION_SYMBOLS=` +
         `${Array.from(macNotificationSymbols).join(",") || "(none)"}`
@@ -1315,9 +1284,11 @@ async function main(): Promise<void> {
         ? `LLM enabled: provider=${llmConfig.provider}, model=${llmConfig.model}`
         : "OPENROUTER_API_KEY and OPENROUTER_MODEL are not set; LLM analysis will be skipped"
     );
-    log("Connecting to Turso database");
-    db = await connectDatabase();
-    log("Turso database ready");
+
+    if (symbols.length === 0) {
+      log("No active tracked symbols. Add symbols at /admin/symbols. Nothing to collect.");
+      return;
+    }
 
     log("Launching browser");
     browser = await puppeteer.launch({
@@ -1379,12 +1350,11 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (error: unknown): Promise<void> => {
-  const symbols = process.env.SYMBOLS?.trim() || "SYMBOLS";
   const message = error instanceof Error ? error.message : String(error);
 
   console.error(message);
   if (shouldShowFailureNotification()) {
-    await showNotification("Stock check failed", symbols, message).catch(() => {});
+    await showNotification("Stock check failed", "tracked symbols", message).catch(() => {});
   }
   process.exitCode = 1;
 });

@@ -13,6 +13,7 @@ It collects quote snapshots from Yahoo Finance, stores them in Turso, captures p
 - Background quote collector that runs during regular US market hours
 - Optional OpenRouter LLM analysis for longer-form recommendations and HFT-style signals
 - Turso-backed persistence for quote history, captured page documents, and LLM output
+- Admin-only symbol management at `/admin/symbols` (CRUD + active toggle, stored in the `tracked_symbols` table)
 - Five-minute r/wallstreetbets monitor for new posts mentioning `buy`, `sell`, `short`, or `long`
 - AI-generated Reddit sentiment summaries with dashboard keyword and timeframe filters
 
@@ -49,6 +50,8 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
+# Optional legacy seed: on first run an empty tracked_symbols table is seeded
+# from SYMBOLS. Afterwards manage symbols at /admin/symbols (admin only).
 SYMBOLS=IONQ,NVDA
 STOCK_INFO_RUN_WHEN_MARKET_CLOSED=false
 
@@ -65,7 +68,7 @@ Leave `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` unset to skip AI analysis; quo
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `SYMBOLS` | Yes | Comma-separated symbols or a JSON array, for example `IONQ,NVDA` or `["IONQ","NVDA"]`. |
+| `SYMBOLS` | No | Legacy seed only: when the `tracked_symbols` table is empty it is seeded once from this comma-separated list or JSON array. Afterwards symbols are managed in the DB at `/admin/symbols` (admin only). |
 | `STOCK_INFO_RUN_WHEN_MARKET_CLOSED` | No | Set to `true` to keep the collector running outside regular US market hours. |
 | `TURSO_DATABASE_URL` | Yes | Turso/libSQL database URL. |
 | `TURSO_AUTH_TOKEN` | Yes | Turso database auth token. |
@@ -131,7 +134,7 @@ The same startup hook starts an independent Reddit scheduler. It runs immediatel
 
 ## Data Flow
 
-1. `stock-info.ts` opens Yahoo Finance pages with Puppeteer.
+1. `stock-info.ts` loads the active symbols from the `tracked_symbols` table (managed at `/admin/symbols`), opens Yahoo Finance pages with Puppeteer.
 2. It extracts quote data and selected quote stats.
 3. It stores quote history and captured page text in Turso.
 4. If OpenRouter env vars are present, it runs:

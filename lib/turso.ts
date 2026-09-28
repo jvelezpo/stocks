@@ -334,6 +334,21 @@ export function ensureStockSchema(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_stock_chat_rate_limits_window_started_at
         ON stock_chat_rate_limits (window_started_at);
+
+      CREATE TABLE IF NOT EXISTS tracked_symbols (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL DEFAULT '',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tracked_symbols_symbol
+        ON tracked_symbols (symbol);
+
+      CREATE INDEX IF NOT EXISTS idx_tracked_symbols_is_active
+        ON tracked_symbols (is_active);
     `)
     .then(ensureRedditSchemaMigrations)
     .catch((error: unknown) => {
