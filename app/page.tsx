@@ -8,11 +8,16 @@ import {
 import { MarketStatusBadge } from "../components/MarketStatusBadge";
 import { PageHeader } from "../components/PageHeader";
 import { RedditSentimentRefreshButton } from "../components/RedditSentimentRefreshButton";
+import { RedditPostLinksButton } from "../components/RedditPostLinksButton";
 import { Sparkline } from "../components/Sparkline";
 import { hasRole, SESSION_COOKIE_NAME, verifySessionToken } from "../lib/auth";
 import { formatDateTime, formatNumber, recommendationTone, toneForChange } from "../lib/format";
 import { REDDIT_KEYWORDS, type RedditKeyword } from "../lib/reddit-core";
-import { getRedditSentimentAnalyses } from "../lib/reddit";
+import {
+  getRedditSentimentAnalyses,
+  getRedditStockMentionLists,
+  type RedditStockMention,
+} from "../lib/reddit";
 import { getStockSummaries } from "../lib/stocks";
 
 export const dynamic = "force-dynamic";
@@ -115,19 +120,58 @@ function recommendationClasses(recommendation: string): string {
   return "bg-zinc-100 text-zinc-600";
 }
 
+function StockMentionList({
+  emptyLabel,
+  stocks,
+}: {
+  emptyLabel: string;
+  stocks: RedditStockMention[];
+}) {
+  if (stocks.length === 0) {
+    return <p className="mt-4 text-sm text-zinc-500">{emptyLabel}</p>;
+  }
+
+  return (
+    <ol className="mt-4 space-y-2">
+      {stocks.map((stock, index) => (
+        <li className="flex items-center gap-3" key={stock.symbol}>
+          <span className="w-5 text-right text-xs font-medium text-zinc-400">
+            {index + 1}
+          </span>
+          <Link
+            className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900 hover:text-emerald-700"
+            href={`/stocks/${encodeURIComponent(stock.symbol)}`}
+          >
+            {stock.symbol}
+            {stock.name ? (
+              <span className="ml-2 font-normal text-zinc-500">{stock.name}</span>
+            ) : null}
+          </Link>
+          <RedditPostLinksButton
+            posts={stock.posts}
+            symbol={stock.symbol}
+          />
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const resolvedSearchParams = await searchParams;
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   const redditKeyword = parseRedditKeyword(resolvedSearchParams.keyword);
   const redditTimeframe = parseRedditTimeframe(resolvedSearchParams.timeframe);
-  const [stocks, redditAnalyses, session] = await Promise.all([
+  const redditSince = sinceForTimeframe(redditTimeframe);
+  const [stocks, redditAnalyses, redditStockMentions, session] = await Promise.all([
     getStockSummaries(),
     getRedditSentimentAnalyses({
       keyword: redditKeyword,
-      since: sinceForTimeframe(redditTimeframe),
+      since: redditSince,
       limit: 12,
     }),
+    getRedditStockMentionLists({ since: redditSince, limit: 5 }),
     sessionToken ? verifySessionToken(sessionToken) : null,
   ]);
   const isAdmin = Boolean(session && hasRole(session.user.role, "admin"));
@@ -333,6 +377,33 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 </Link>
               </div>
             </form>
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-3">
+            <div className="rounded-lg border border-zinc-200 bg-zinc-50/60 p-5">
+              <h3 className="font-semibold text-zinc-950">Most discussed</h3>
+              <p className="mt-1 text-xs text-zinc-500">Tracked stocks mentioned in the most posts</p>
+              <StockMentionList
+                emptyLabel="No tracked stocks were mentioned in this timeframe."
+                stocks={redditStockMentions.mostDiscussed}
+              />
+            </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-5">
+              <h3 className="font-semibold text-emerald-950">Buy mentions</h3>
+              <p className="mt-1 text-xs text-emerald-700">Stocks mentioned in posts that include “buy”</p>
+              <StockMentionList
+                emptyLabel="No tracked stocks have buy mentions in this timeframe."
+                stocks={redditStockMentions.buy}
+              />
+            </div>
+            <div className="rounded-lg border border-red-200 bg-red-50/50 p-5">
+              <h3 className="font-semibold text-red-950">Sell mentions</h3>
+              <p className="mt-1 text-xs text-red-700">Stocks mentioned in posts that include “sell”</p>
+              <StockMentionList
+                emptyLabel="No tracked stocks have sell mentions in this timeframe."
+                stocks={redditStockMentions.sell}
+              />
+            </div>
           </div>
 
           {redditAnalyses.length === 0 ? (

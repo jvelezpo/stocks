@@ -11,7 +11,7 @@
     "reddit:sentiment": "node --env-file=.env reddit-sentiment.ts",
     "stock:info": "node --env-file=.env stock-info.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test lib/opencode-cli.test.ts lib/reddit-core.test.ts lib/reddit-sentiment-scheduler.test.ts lib/stock-chat.test.ts lib/turso.test.ts"
+    "test": "node --test lib/opencode-cli.test.ts lib/reddit-core.test.ts lib/reddit.test.ts lib/reddit-sentiment-scheduler.test.ts lib/stock-chat.test.ts lib/stock-reddit-analysis.test.ts lib/turso.test.ts"
   },
   "keywords": [],
   "author": "",

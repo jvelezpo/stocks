@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
@@ -11,6 +12,7 @@ import {
   Gauge,
   History,
   LineChart,
+  MessageSquareText,
 } from "lucide-react";
 import { Sparkline } from "../../../components/Sparkline";
 import { MarketStatusBadge } from "../../../components/MarketStatusBadge";
@@ -24,6 +26,9 @@ import {
 import { RecentCapturesChart } from "../../../components/RecentCapturesChart";
 import { SymbolPageRefresher } from "../../../components/SymbolPageRefresher";
 import { StockChat } from "../../../components/StockChat";
+import { StockRedditAnalysisForm } from "../../../components/StockRedditAnalysisForm";
+import { hasRole, SESSION_COOKIE_NAME, verifySessionToken } from "../../../lib/auth";
+import { getStockRedditAnalyses } from "../../../lib/stock-reddit-analysis";
 import { getStockChartHistory, getStockDetail } from "../../../lib/stocks";
 
 export const dynamic = "force-dynamic";
@@ -172,7 +177,14 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
   }
 
   const { latest, history, documents, analyses, hftAnalyses } = detail;
-  const chartHistory = await getStockChartHistory(latest.symbol, "1d");
+  const cookieStore = await cookies();
+  const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  const [chartHistory, redditAnalyses, session] = await Promise.all([
+    getStockChartHistory(latest.symbol, "1d"),
+    getStockRedditAnalyses(latest.symbol, 5),
+    sessionToken ? verifySessionToken(sessionToken) : null,
+  ]);
+  const isAdmin = Boolean(session && hasRole(session.user.role, "admin"));
   const latestAnalysis = analyses[0];
   const latestHftAnalysis = hftAnalyses[0];
   const parsedHftAnalysis = latestHftAnalysis
@@ -603,6 +615,46 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
           </div>
         </aside>
       </section>
+      {isAdmin ? (
+        <section className="mx-auto max-w-7xl px-5 pb-5 sm:px-8 lg:px-10">
+          <StockRedditAnalysisForm symbol={latest.symbol} />
+        </section>
+      ) : null}
+      {redditAnalyses.length > 0 ? (
+        <section className="mx-auto max-w-7xl px-5 pb-10 sm:px-8 lg:px-10">
+          <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-soft">
+            <div className="flex items-center gap-2 text-sm text-zinc-500">
+              <MessageSquareText className="h-4 w-4 text-orange-600" />
+              Reddit research
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-zinc-950">
+              Recent WallStreetBets analyses
+            </h2>
+            <div className="mt-5 space-y-4">
+              {redditAnalyses.map((analysis) => (
+                <article
+                  className="rounded-lg border border-zinc-200 bg-zinc-50/60 p-5"
+                  key={analysis.id}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-zinc-500">
+                    <span>{formatDateTime(analysis.createdAt)}</span>
+                    <span>
+                      {analysis.postCount} Reddit {analysis.postCount === 1 ? "post" : "posts"}
+                    </span>
+                  </div>
+                  <div className="mt-3 text-sm font-semibold text-zinc-950">
+                    {analysis.instruction}
+                  </div>
+                  <div className="mt-3 whitespace-pre-wrap break-words border-l-2 border-orange-200 pl-4 text-sm leading-6 text-zinc-700">
+                    {analysis.analysisText}
+                  </div>
+                  <div className="mt-3 text-xs text-zinc-500">Model: {analysis.model}</div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
       <StockChat symbol={latest.symbol} />
     </main>
   );

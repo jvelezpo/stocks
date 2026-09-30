@@ -285,6 +285,20 @@ export function ensureStockSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_reddit_sentiment_analyses_overall_sentiment
         ON reddit_sentiment_analyses (overall_sentiment);
 
+      CREATE TABLE IF NOT EXISTS stock_reddit_analyses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        instruction_text TEXT NOT NULL,
+        post_count INTEGER NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        analysis_text TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_stock_reddit_analyses_symbol_created_at
+        ON stock_reddit_analyses (symbol, created_at DESC, id DESC);
+
       CREATE TABLE IF NOT EXISTS stock_chat_sessions (
         id TEXT PRIMARY KEY,
         visitor_hash TEXT NOT NULL,

@@ -63,7 +63,7 @@ export function parsePuppeteerRedditPosts(value: unknown): RedditPost[] {
       ""
     );
     const title = requiredString(item, "title", context);
-    const author = requiredString(item, "author", context).replace(/^u\//i, "");
+    const author = requiredString(item, "author", context).replace(/^\/?u\//i, "");
     const postedAtValue = requiredString(item, "postedAt", context);
     const sourceUrlValue = requiredString(item, "sourceUrl", context);
     const bodyText = item.bodyText === undefined ? "" : item.bodyText;
@@ -121,6 +121,98 @@ export function parsePuppeteerRedditPosts(value: unknown): RedditPost[] {
 
   return Array.from(
     new Map(posts.map((post) => [post.redditPostId, post] as const)).values()
+  );
+}
+
+function decodeXmlEntities(value: string): string {
+  const namedEntities: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    quot: '"',
+  };
+
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (entity, codePoint: string) => {
+      const value = Number.parseInt(codePoint, 16);
+      return value <= 0x10ffff ? String.fromCodePoint(value) : entity;
+    })
+    .replace(/&#(\d+);/g, (entity, codePoint: string) => {
+      const value = Number.parseInt(codePoint, 10);
+      return value <= 0x10ffff ? String.fromCodePoint(value) : entity;
+    })
+    .replace(
+      /&(amp|apos|gt|lt|quot);/gi,
+      (_, name: string) => namedEntities[name.toLowerCase()]
+    );
+}
+
+function atomElement(value: string, name: string): string {
+  return value.match(
+    new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`, "i")
+  )?.[1] ?? "";
+}
+
+function atomAttribute(value: string, element: string, attribute: string): string {
+  return value.match(
+    new RegExp(
+      `<${element}\\b[^>]*\\b${attribute}\\s*=\\s*["']([^"']*)["']`,
+      "i"
+    )
+  )?.[1] ?? "";
+}
+
+function atomContentText(value: string): string {
+  const html = decodeXmlEntities(value);
+  const postBody = html.match(
+    /<!--\s*SC_OFF\s*-->([\s\S]*?)<!--\s*SC_ON\s*-->/i
+  )?.[1];
+
+  if (!postBody) {
+    return "";
+  }
+
+  return decodeXmlEntities(
+    postBody
+      .replace(/<br\s*\/?\s*>/gi, "\n")
+      .replace(/<\/p\s*>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function parseRedditAtomPosts(value: string): RedditPost[] {
+  if (!/<feed\b/i.test(value)) {
+    throw new Error("Reddit did not return an Atom feed.");
+  }
+
+  const entries = Array.from(
+    value.matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/gi)
+  );
+  if (entries.length === 0) {
+    return [];
+  }
+
+  return parsePuppeteerRedditPosts(
+    entries.map((entry) => {
+      const entryXml = entry[1] ?? "";
+      const authorXml = atomElement(entryXml, "author");
+
+      return {
+        redditPostId: decodeXmlEntities(atomElement(entryXml, "id")),
+        subreddit: decodeXmlEntities(atomAttribute(entryXml, "category", "term")),
+        title: decodeXmlEntities(atomElement(entryXml, "title")),
+        author: decodeXmlEntities(atomElement(authorXml, "name")),
+        postedAt: decodeXmlEntities(
+          atomElement(entryXml, "published") || atomElement(entryXml, "updated")
+        ),
+        sourceUrl: decodeXmlEntities(atomAttribute(entryXml, "link", "href")),
+        bodyText: atomContentText(atomElement(entryXml, "content")),
+        isStickied: false,
+      };
+    })
   );
 }
 
