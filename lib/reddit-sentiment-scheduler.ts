@@ -9,7 +9,16 @@ type SchedulerState = {
   running: boolean;
   cleanupRegistered: boolean;
   started: boolean;
+  lastRunStatus: "idle" | "running" | "succeeded" | "failed";
+  lastRunMessage: string;
+  lastStartedAt: string;
+  lastFinishedAt: string;
 };
+
+export type RedditSentimentRunStatus = Pick<
+  SchedulerState,
+  "running" | "lastRunStatus" | "lastRunMessage" | "lastStartedAt" | "lastFinishedAt"
+>;
 
 declare global {
   var __redditSentimentScheduler: SchedulerState | undefined;
@@ -22,9 +31,18 @@ function schedulerState(): SchedulerState {
     running: false,
     cleanupRegistered: false,
     started: false,
+    lastRunStatus: "idle",
+    lastRunMessage: "",
+    lastStartedAt: "",
+    lastFinishedAt: "",
   };
 
-  return globalThis.__redditSentimentScheduler;
+  const state = globalThis.__redditSentimentScheduler;
+  state.lastRunStatus ??= state.running ? "running" : "idle";
+  state.lastRunMessage ??= "";
+  state.lastStartedAt ??= "";
+  state.lastFinishedAt ??= "";
+  return state;
 }
 
 function log(message: string): void {
@@ -33,13 +51,16 @@ function log(message: string): void {
   );
 }
 
-function runRedditSentiment(state: SchedulerState): void {
+function runRedditSentiment(state: SchedulerState): boolean {
   if (state.running) {
     log("Skipping reddit-sentiment.ts run because the previous run is still active.");
-    return;
+    return false;
   }
 
   state.running = true;
+  state.lastRunStatus = "running";
+  state.lastRunMessage = "";
+  state.lastStartedAt = new Date().toISOString();
   log("Starting reddit-sentiment.ts");
 
   const args = existsSync(".env")
@@ -54,7 +75,7 @@ function runRedditSentiment(state: SchedulerState): void {
 
   state.child = child;
 
-  const finish = (message: string): void => {
+  const finish = (status: "succeeded" | "failed", message: string): void => {
     if (settled) {
       return;
     }
@@ -67,24 +88,48 @@ function runRedditSentiment(state: SchedulerState): void {
     }
 
     state.running = false;
+    state.lastRunStatus = status;
+    state.lastRunMessage = message;
+    state.lastFinishedAt = new Date().toISOString();
   };
 
   child.once("error", (error) => {
-    finish(`reddit-sentiment.ts failed to start: ${error.message}`);
+    finish("failed", `reddit-sentiment.ts failed to start: ${error.message}`);
   });
   child.once("close", (code, signal) => {
     if (signal) {
-      finish(`reddit-sentiment.ts stopped by ${signal}.`);
+      finish("failed", `reddit-sentiment.ts stopped by ${signal}.`);
       return;
     }
 
     if (code === 0) {
-      finish("reddit-sentiment.ts completed successfully.");
+      finish("succeeded", "reddit-sentiment.ts completed successfully.");
       return;
     }
 
-    finish(`reddit-sentiment.ts exited with code ${code ?? "unknown"}.`);
+    finish("failed", `reddit-sentiment.ts exited with code ${code ?? "unknown"}.`);
   });
+  return true;
+}
+
+export function getRedditSentimentRunStatus(): RedditSentimentRunStatus {
+  const state = schedulerState();
+
+  return {
+    running: state.running,
+    lastRunStatus: state.lastRunStatus,
+    lastRunMessage: state.lastRunMessage,
+    lastStartedAt: state.lastStartedAt,
+    lastFinishedAt: state.lastFinishedAt,
+  };
+}
+
+export function triggerRedditSentimentRefresh(): RedditSentimentRunStatus & {
+  started: boolean;
+} {
+  const state = schedulerState();
+  const started = runRedditSentiment(state);
+  return { started, ...getRedditSentimentRunStatus() };
 }
 
 function clearRedditSentimentInterval(

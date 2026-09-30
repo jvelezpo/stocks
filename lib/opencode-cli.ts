@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 export const DEFAULT_OPENCODE_MODEL = "muse-spark-1.3-contributor-free";
 export const DEFAULT_OPENCODE_CLI = "opencode";
+const OPENCODE_VARIANT = "minimal";
 
 export type OpencodeCliOptions = {
   model: string;
@@ -101,9 +102,9 @@ function extractTextPart(event: unknown): string {
 /**
  * Run a single non-interactive prompt through the OpenCode CLI.
  *
- * Uses `opencode run --format json`, pipes the prompt via stdin (avoids argv
- * limits for large analysis payloads), and runs in a fresh empty temp dir so
- * any file-tool calls the model attempts cannot see the project checkout.
+ * Uses `opencode run --format json` with the prompt as its required positional
+ * argument and runs in a fresh empty temp dir so any file-tool calls the model
+ * attempts cannot see the project checkout.
  *
  * NOTE: custom permission overrides (OPENCODE_PERMISSION /
  * OPENCODE_CONFIG_CONTENT / custom agents with deny rules) break the Zen
@@ -139,11 +140,23 @@ async function runCliInDir(
   prompt: string,
   args: { model: string; timeoutMs: number; cliPath: string; workDir: string; maxOutputTokens?: number }
 ): Promise<OpencodeCliResult> {
-  const cliArgs = ["run", "--format", "json", "-m", args.model, "--dir", args.workDir];
+  const cliArgs = [
+    "run",
+    "--format",
+    "json",
+    "-m",
+    args.model,
+    "--variant",
+    OPENCODE_VARIANT,
+    "--dir",
+    args.workDir,
+    "--",
+    prompt,
+  ];
 
   return new Promise<OpencodeCliResult>((resolve, reject) => {
     const child = spawn(args.cliPath, cliArgs, {
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         ...(args.maxOutputTokens && args.maxOutputTokens > 0
@@ -217,13 +230,6 @@ async function runCliInDir(
         reject(new Error(detail ? `${message} (stderr: ${detail})` : message));
       }
     });
-
-    try {
-      child.stdin.write(prompt);
-      child.stdin.end();
-    } catch (error: unknown) {
-      fail(error instanceof Error ? error : new Error(String(error)));
-    }
   });
 }
 
@@ -287,6 +293,7 @@ function parseCliOutput(stdout: string, model: string): OpencodeCliResult {
     rawResponseJson: JSON.stringify({
       cli: "opencode run --format json",
       model,
+      variant: OPENCODE_VARIANT,
       sessionId,
       usage: usage ?? {},
     }),

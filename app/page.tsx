@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import {
   Activity,
   ArrowUpRight,
@@ -6,7 +7,9 @@ import {
 } from "lucide-react";
 import { MarketStatusBadge } from "../components/MarketStatusBadge";
 import { PageHeader } from "../components/PageHeader";
+import { RedditSentimentRefreshButton } from "../components/RedditSentimentRefreshButton";
 import { Sparkline } from "../components/Sparkline";
+import { hasRole, SESSION_COOKIE_NAME, verifySessionToken } from "../lib/auth";
 import { formatDateTime, formatNumber, recommendationTone, toneForChange } from "../lib/format";
 import { REDDIT_KEYWORDS, type RedditKeyword } from "../lib/reddit-core";
 import { getRedditSentimentAnalyses } from "../lib/reddit";
@@ -114,16 +117,20 @@ function recommendationClasses(recommendation: string): string {
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const resolvedSearchParams = await searchParams;
+  const cookieStore = await cookies();
+  const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   const redditKeyword = parseRedditKeyword(resolvedSearchParams.keyword);
   const redditTimeframe = parseRedditTimeframe(resolvedSearchParams.timeframe);
-  const [stocks, redditAnalyses] = await Promise.all([
+  const [stocks, redditAnalyses, session] = await Promise.all([
     getStockSummaries(),
     getRedditSentimentAnalyses({
       keyword: redditKeyword,
       since: sinceForTimeframe(redditTimeframe),
       limit: 12,
     }),
+    sessionToken ? verifySessionToken(sessionToken) : null,
   ]);
+  const isAdmin = Boolean(session && hasRole(session.user.role, "admin"));
   const latestFetch = stocks
     .map((stock) => stock.fetchedAt)
     .sort()
@@ -266,9 +273,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 <Activity className="h-4 w-4 text-orange-600" />
                 Reddit monitor
               </div>
-              <h2 className="mt-2 text-2xl font-semibold text-zinc-950">
-                WallStreetBets sentiment
-              </h2>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <h2 className="text-2xl font-semibold text-zinc-950">
+                  WallStreetBets sentiment
+                </h2>
+                {isAdmin ? <RedditSentimentRefreshButton /> : null}
+              </div>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600">
                 Batch-wide AI summaries of new trading discussions that mention the monitored keywords.
               </p>

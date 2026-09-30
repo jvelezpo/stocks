@@ -1384,7 +1384,7 @@ async function askOpencode(
 ): Promise<OpencodeResult> {
   // Run through the local OpenCode CLI so the Zen free tier is used from
   // within OpenCode instead of via a direct Responses API call (which the
-  // free tier rejects with 403). The prompt is piped via stdin.
+  // free tier rejects with 403).
   const result = await runOpencodePrompt(buildChatPrompt(detail, history, content), {
     model: config.model,
     timeoutMs: config.timeoutMs,
