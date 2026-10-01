@@ -11,7 +11,9 @@ test("treats Reddit and Polymarket as optional sources and returns only the late
   const { ensureStockSchema, turso } = await import("./turso.ts");
   const {
     getPolymarketStockMarketGroups,
+    getStoredPolymarketStockMarketGroups,
     getStockRedditAnalyses,
+    refreshPolymarketMarketSnapshots,
     runStockRedditAnalysis,
   } = await import("./stock-reddit-analysis.ts");
   const globals = globalThis as Record<string, unknown>;
@@ -126,6 +128,16 @@ test("treats Reddit and Polymarket as optional sources and returns only the late
     assert.equal(marketGroups.length, 1);
     assert.equal(marketGroups[0]?.symbol, "TEST");
     assert.equal(marketGroups[0]?.markets[0]?.outcomes[0]?.probability, 0.31);
+
+    const refresh = await refreshPolymarketMarketSnapshots([
+      { symbol: "TEST", name: "Test Corporation" },
+    ]);
+    assert.deepEqual(refresh, { refreshedSymbols: 1, storedMarkets: 1 });
+    const storedMarketGroups = await getStoredPolymarketStockMarketGroups([
+      { symbol: "TEST", name: "Test Corporation" },
+    ]);
+    assert.equal(storedMarketGroups.length, 1);
+    assert.equal(storedMarketGroups[0]?.markets[0]?.outcomes[0]?.probability, 0.31);
 
     globals.__stockRedditPostsMock = async () => {
       throw new Error("Reddit unavailable");

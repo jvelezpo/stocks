@@ -4,7 +4,7 @@ import {
   formatMarketDateTime,
   getMarketSession,
   millisecondsUntil,
-} from "./market-hours";
+} from "./market-hours.ts";
 
 const stockInfoIntervalMs = 60_000;
 const runWhenMarketClosedEnv = "STOCK_INFO_RUN_WHEN_MARKET_CLOSED";
@@ -240,6 +240,10 @@ export function startStockInfoScheduler(): SchedulerState {
   registerCleanup(state);
   syncMarketSchedule(state, "startup");
   return state;
+}
+
+export function getStockInfoSchedulerState(): SchedulerState {
+  return schedulerState();
 }
 
 export function stopStockInfoScheduler(reason = "shutdown"): void {

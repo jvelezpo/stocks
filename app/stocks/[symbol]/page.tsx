@@ -29,7 +29,10 @@ import { StockChat } from "../../../components/StockChat";
 import { StockRedditAnalysisForm } from "../../../components/StockRedditAnalysisForm";
 import { hasRole, SESSION_COOKIE_NAME, verifySessionToken } from "../../../lib/auth";
 import { getStockRedditAnalyses } from "../../../lib/stock-reddit-analysis";
-import { getStockChartHistory, getStockDetail } from "../../../lib/stocks";
+import {
+  getCachedStockChartHistory,
+  getCachedStockDetail,
+} from "../../../lib/dashboard-cache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -154,7 +157,7 @@ function formatPlanSeconds(value: number | undefined): string {
 
 export async function generateMetadata({ params }: SymbolPageProps): Promise<Metadata> {
   const { symbol } = await params;
-  const detail = await getStockDetail(symbol);
+  const detail = await getCachedStockDetail(symbol);
 
   if (!detail) {
     return {
@@ -170,7 +173,7 @@ export async function generateMetadata({ params }: SymbolPageProps): Promise<Met
 
 export default async function SymbolPage({ params }: SymbolPageProps) {
   const { symbol } = await params;
-  const detail = await getStockDetail(symbol);
+  const detail = await getCachedStockDetail(symbol);
 
   if (!detail) {
     notFound();
@@ -180,7 +183,7 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   const [chartHistory, redditAnalyses, session] = await Promise.all([
-    getStockChartHistory(latest.symbol, "1d"),
+    getCachedStockChartHistory(latest.symbol, "1d"),
     getStockRedditAnalyses(latest.symbol, 5),
     sessionToken ? verifySessionToken(sessionToken) : null,
   ]);

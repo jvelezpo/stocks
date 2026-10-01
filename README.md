@@ -71,6 +71,7 @@ LLM analysis runs through the local Opencode CLI (`opencode run --format json`).
 | --- | --- | --- |
 | `SYMBOLS` | No | Legacy seed only: when the `tracked_symbols` table is empty it is seeded once from this comma-separated list or JSON array. Afterwards symbols are managed in the DB at `/admin/symbols` (admin only). |
 | `STOCK_INFO_RUN_WHEN_MARKET_CLOSED` | No | Set to `true` to keep the collector running outside regular US market hours. |
+| `RUN_SCHEDULERS_IN_WEB_PROCESS` | No | Compatibility escape hatch. Set to `true` only for a single-instance deployment that cannot run the dedicated worker. Defaults to `false`. |
 | `TURSO_DATABASE_URL` | Yes | Turso/libSQL database URL. |
 | `TURSO_AUTH_TOKEN` | Yes | Turso database auth token. |
 | `OPENCODE_MODEL` | No | Opencode model id used for all LLM analysis via the local CLI. Defaults to `muse-spark-1.3-contributor-free` (Muse Spark 1.3 Free). Use `opencode/provider-model` format or a short id (short ids are prefixed with `opencode/`). |
@@ -82,13 +83,21 @@ LLM analysis runs through the local Opencode CLI (`opencode run --format json`).
 | `STOCK_CHAT_RATE_LIMIT_SALT` | No | Secret used to hash network rate-limit keys for stock chat. Defaults to the Turso auth token. |
 | `STOCK_CHAT_TRUST_PROXY_HEADERS` | No | Set to `true` only when a trusted edge proxy overwrites forwarded client-IP headers; enables per-network chat limits. |
 | `REDDIT_TIMEOUT_MS` | No | Puppeteer page navigation and rendered-content timeout for Reddit monitoring. Defaults to `60000`. |
+| `POLYMARKET_TIMEOUT_MS` | No | Polymarket request timeout. Defaults to `60000`. |
 
 ## Running
 
-Start the dashboard in development:
+Start the dashboard and hot-reloading workers together:
 
 ```bash
 npm run dev
+```
+
+Run only one side when debugging it independently:
+
+```bash
+npm run dev:web
+npm run workers:dev
 ```
 
 Open:
@@ -121,9 +130,11 @@ Start the production dashboard after building:
 npm run dashboard:start
 ```
 
+Run `npm run workers:start` as a separate long-lived process in production.
+
 ## Background Collection
 
-When the Next.js app starts in the Node.js runtime, `instrumentation.ts` starts the stock-info scheduler. The scheduler:
+`npm run workers:start` runs the stock-info scheduler outside the Next.js web process. The scheduler:
 
 - runs `stock-info.ts` every 60 seconds
 - only runs during regular US market hours by default
@@ -132,7 +143,9 @@ When the Next.js app starts in the Node.js runtime, `instrumentation.ts` starts 
 
 Set `STOCK_INFO_RUN_WHEN_MARKET_CLOSED=true` to disable the market-hours gate.
 
-The same startup hook starts an independent Reddit scheduler. It runs immediately and every five minutes, operates outside market hours, and skips overlapping runs. Each run opens r/wallstreetbets with Puppeteer, validates rendered posts back to the prior poll boundary, and deduplicates matching posts by their stable Reddit ID.
+The worker also starts independent Reddit and Polymarket schedulers. Reddit runs immediately and every five minutes, operates outside market hours, and skips overlapping runs. Each run opens r/wallstreetbets with Puppeteer, validates rendered posts back to the prior poll boundary, and deduplicates matching posts by their stable Reddit ID. Polymarket refreshes every five minutes and stores snapshots in Turso so dashboard requests never wait on Polymarket's API.
+
+For compatibility, `RUN_SCHEDULERS_IN_WEB_PROCESS=true` restores the old single-process behavior. Do not enable it when multiple web replicas are running.
 
 ## Data Flow
 
@@ -143,6 +156,8 @@ The same startup hook starts an independent Reddit scheduler. It runs immediatel
    - `prompts/prompt.md` for general stock analysis
    - `prompts/hft.md` for HFT-style BUY/SELL/HOLD signals
 5. The Next.js dashboard reads from Turso and renders the latest summaries and symbol detail pages.
+
+Polymarket discovery runs in the worker. It stores current matching markets in `polymarket_market_snapshots`; the dashboard reads these snapshots instead of calling Polymarket during navigation.
 
 For Reddit sentiment:
 
@@ -159,7 +174,10 @@ For stock chat, open any `/stocks/{symbol}` page and use the floating chat butto
 ## Useful Commands
 
 ```bash
-npm run dev          # start Next.js on port 5000
+npm run dev          # start Next.js plus hot-reloading workers
+npm run dev:web      # start only Next.js on port 5000
+npm run workers:dev  # start only workers with hot reload
+npm run workers:start # run quote, Reddit, and Polymarket schedulers
 npm run stock:info   # run one collector pass
 npm run reddit:sentiment # run one Reddit sentiment pass
 npm test             # run Reddit validation unit tests
@@ -171,7 +189,7 @@ npm run build        # production build
 
 - The app creates the required Turso tables automatically on startup.
 - HFT output is stored as structured JSON, then rendered as a human-readable decision panel in the UI.
-- The five-minute timers require a long-lived app process. For serverless or multi-replica deployments, run the Reddit collector from one dedicated worker or external scheduler instead.
+- The collection timers require one long-lived worker process. Do not run more than one worker against the same deployment.
 - Reddit monitoring reads public pages through Puppeteer; no Reddit client ID, client secret, or API user-agent configuration is required.
 - Stock chat history is browser-specific until the application adds signed-in user accounts; clearing its anonymous visitor cookie starts a new history scope.
 - This project is for monitoring and decision support. It is not financial advice.

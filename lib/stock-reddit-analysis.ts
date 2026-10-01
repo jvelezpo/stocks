@@ -1,3 +1,4 @@
+import type { InStatement } from "@libsql/client";
 import { parseRedditAtomPosts, type RedditPost } from "./reddit-core.ts";
 import {
   DEFAULT_LLM_MAX_OUTPUT_TOKENS,
@@ -61,6 +62,18 @@ export type PolymarketStockMarketGroup = {
 
 type PolymarketFetchOptions = {
   revalidateSeconds?: number;
+};
+
+type PolymarketSnapshotRow = {
+  symbol: string;
+  stock_name: string;
+  event_text: string;
+  market_text: string;
+  outcomes_json: string;
+  volume: number | null;
+  liquidity: number | null;
+  end_date: string;
+  source_url: string;
 };
 
 declare global {
@@ -360,6 +373,166 @@ export async function getPolymarketStockMarketGroups(
   );
 }
 
+function parseStoredOutcomes(
+  value: string
+): PolymarketMarketSnapshot["outcomes"] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.flatMap((outcome) => {
+      if (!isRecord(outcome) || typeof outcome.label !== "string") {
+        return [];
+      }
+
+      return [{
+        label: outcome.label,
+        probability: numberValue(outcome.probability),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function refreshPolymarketMarketSnapshots(
+  stocks: { symbol: string; name: string }[],
+  marketsPerStock = 10
+): Promise<{ refreshedSymbols: number; storedMarkets: number }> {
+  const boundedLimit = Math.min(Math.max(Math.trunc(marketsPerStock), 1), 25);
+  const results = await Promise.allSettled(
+    stocks.map(async (stock) => ({
+      symbol: normalizeSymbol(stock.symbol),
+      name: stock.name.trim(),
+      markets: (await getPolymarketMarkets(stock.symbol, stock.name))
+        .sort((left, right) => (right.volume ?? 0) - (left.volume ?? 0))
+        .slice(0, boundedLimit),
+    }))
+  );
+  const successful = results.filter(
+    (result): result is PromiseFulfilledResult<{
+      symbol: string;
+      name: string;
+      markets: PolymarketMarketSnapshot[];
+    }> => result.status === "fulfilled"
+  );
+
+  if (stocks.length > 0 && successful.length === 0) {
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    throw failed?.reason instanceof Error
+      ? failed.reason
+      : new Error("Could not refresh Polymarket snapshots.");
+  }
+
+  await ensureStockSchema();
+  const capturedAt = new Date().toISOString();
+  const statements: InStatement[] = [];
+  let storedMarkets = 0;
+
+  for (const result of successful) {
+    statements.push({
+      sql: "DELETE FROM polymarket_market_snapshots WHERE symbol = ?",
+      args: [result.value.symbol],
+    });
+
+    for (const market of result.value.markets) {
+      statements.push({
+        sql: `
+          INSERT INTO polymarket_market_snapshots (
+            captured_at,
+            symbol,
+            stock_name,
+            event_text,
+            market_text,
+            outcomes_json,
+            volume,
+            liquidity,
+            end_date,
+            source_url
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        args: [
+          capturedAt,
+          result.value.symbol,
+          result.value.name,
+          market.event,
+          market.market,
+          JSON.stringify(market.outcomes),
+          market.volume,
+          market.liquidity,
+          market.endDate,
+          market.sourceUrl,
+        ],
+      });
+      storedMarkets += 1;
+    }
+  }
+
+  if (statements.length > 0) {
+    await turso.batch(statements, "write");
+  }
+
+  return { refreshedSymbols: successful.length, storedMarkets };
+}
+
+export async function getStoredPolymarketStockMarketGroups(
+  stocks: { symbol: string; name: string }[],
+  marketsPerStock = 3
+): Promise<PolymarketStockMarketGroup[]> {
+  if (stocks.length === 0) {
+    return [];
+  }
+
+  const boundedLimit = Math.min(Math.max(Math.trunc(marketsPerStock), 1), 10);
+  const allowedSymbols = new Set(stocks.map((stock) => stock.symbol.trim().toUpperCase()));
+  await ensureStockSchema();
+  const result = await turso.execute(`
+    SELECT
+      symbol,
+      stock_name,
+      event_text,
+      market_text,
+      outcomes_json,
+      volume,
+      liquidity,
+      end_date,
+      source_url
+    FROM polymarket_market_snapshots
+    ORDER BY symbol ASC, volume DESC, id DESC
+  `);
+  const groups = new Map<string, PolymarketStockMarketGroup>();
+
+  for (const row of result.rows as unknown as PolymarketSnapshotRow[]) {
+    if (!allowedSymbols.has(row.symbol)) {
+      continue;
+    }
+
+    const group = groups.get(row.symbol) ?? {
+      symbol: row.symbol,
+      name: row.stock_name,
+      markets: [],
+    };
+    if (group.markets.length < boundedLimit) {
+      group.markets.push({
+        event: row.event_text,
+        market: row.market_text,
+        outcomes: parseStoredOutcomes(row.outcomes_json),
+        volume: row.volume === null ? null : Number(row.volume),
+        liquidity: row.liquidity === null ? null : Number(row.liquidity),
+        endDate: row.end_date,
+        sourceUrl: row.source_url,
+      });
+    }
+    groups.set(row.symbol, group);
+  }
+
+  return [...groups.values()];
+}
+
 async function collectWallStreetBetsPosts(symbol: string): Promise<RedditPost[]> {
   if (globalThis.__stockRedditPostsMock) {
     return globalThis.__stockRedditPostsMock(symbol);
@@ -451,7 +624,7 @@ export async function runStockRedditAnalysis(
       sql: `
         SELECT name
         FROM stock_history
-        WHERE UPPER(symbol) = UPPER(?)
+        WHERE symbol = ?
         ORDER BY fetched_at DESC, id DESC
         LIMIT 1
       `,
@@ -530,7 +703,7 @@ export async function getStockRedditAnalyses(
     sql: `
       SELECT id, created_at, symbol, instruction_text, post_count, market_count, model, analysis_text
       FROM stock_reddit_analyses
-      WHERE UPPER(symbol) = UPPER(?)
+      WHERE symbol = ?
       ORDER BY created_at DESC, id DESC
       LIMIT ?
     `,

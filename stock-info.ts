@@ -635,7 +635,7 @@ async function recentStockHistoryRows(
       FROM (
         SELECT *
         FROM stock_history
-        WHERE UPPER(symbol) = UPPER(?)
+        WHERE symbol = ?
         ORDER BY fetched_at DESC, id DESC
         LIMIT 60
       )
@@ -783,7 +783,7 @@ async function latestAnalysisRun(
     sql: `
       SELECT created_at, status, provider, model
       FROM stock_analyses
-      WHERE UPPER(symbol) = UPPER(?)
+      WHERE symbol = ?
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,
@@ -801,7 +801,7 @@ async function latestHftAnalysisRun(
     sql: `
       SELECT created_at, status, provider, model
       FROM stock_hft_analyses
-      WHERE UPPER(symbol) = UPPER(?)
+      WHERE symbol = ?
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,

@@ -91,6 +91,9 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
     const stockAnalysisColumns = await turso.execute(
       "PRAGMA table_info(stock_reddit_analyses)"
     );
+    const polymarketColumns = await turso.execute(
+      "PRAGMA table_info(polymarket_market_snapshots)"
+    );
     const postColumnNames = new Set(postColumns.rows.map((row) => row.name));
     const stateColumnNames = new Set(stateColumns.rows.map((row) => row.name));
     const stockAnalysisColumnNames = new Set(
@@ -111,6 +114,7 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
     assert.equal(postColumnNames.has("sentiment_analysis_id"), true);
     assert.equal(stateColumnNames.has("last_seen_posted_at"), true);
     assert.equal(stockAnalysisColumnNames.has("market_count"), true);
+    assert.equal(polymarketColumns.rows.some((row) => row.name === "outcomes_json"), true);
     assert.equal(migratedPost.rows[0]?.analysis_status, "completed");
     assert.equal(Number(migratedPost.rows[0]?.sentiment_analysis_id), 1);
   } finally {

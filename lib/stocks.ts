@@ -194,16 +194,6 @@ async function allRows<T>(
   return result.rows as unknown as T[];
 }
 
-async function getRow<T>(
-  db: Client,
-  sql: string,
-  args?: InArgs
-): Promise<T | null> {
-  const rows = await allRows<T>(db, sql, args);
-
-  return rows[0] ?? null;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -420,13 +410,10 @@ function latestSummarySql(whereClause = ""): string {
 
 export function getStockSummaries(): Promise<StockSummary[]> {
   return withDatabase(async (db) => {
-    const summaryRows = await allRows<StockSummaryRow>(
-      db,
-      `${latestSummarySql()} ORDER BY latest_history.symbol ASC`
-    );
-    const historyRows = await allRows<PricePointRow>(
-      db,
-      `
+    const [summaryResult, historyResult] = await db.batch(
+      [
+        `${latestSummarySql()} ORDER BY latest_history.symbol ASC`,
+        `
         SELECT symbol, fetched_at, price
         FROM (
           SELECT
@@ -442,8 +429,12 @@ export function getStockSummaries(): Promise<StockSummary[]> {
         )
         WHERE row_number <= 18
         ORDER BY symbol ASC, fetched_at ASC, id ASC
-      `
+      `,
+      ],
+      "read"
     );
+    const summaryRows = summaryResult.rows as unknown as StockSummaryRow[];
+    const historyRows = historyResult.rows as unknown as PricePointRow[];
     const historyBySymbol = new Map<string, PricePoint[]>();
 
     for (const row of historyRows) {
@@ -476,11 +467,11 @@ export async function getStockChartHistory(
         WITH bounded_history AS (
           SELECT *
           FROM stock_history
-          WHERE UPPER(symbol) = UPPER(?)
+          WHERE symbol = ?
             AND unixepoch(fetched_at) >= (
               SELECT MAX(unixepoch(fetched_at))
               FROM stock_history
-              WHERE UPPER(symbol) = UPPER(?)
+              WHERE symbol = ?
             ) - ?
         ),
         ranked_history AS (
@@ -544,117 +535,123 @@ export async function getStockDetail(symbol: string): Promise<StockDetail | null
   }
 
   return withDatabase(async (db) => {
-    const latestRow = await getRow<StockSummaryRow>(
-      db,
-      `${latestSummarySql("WHERE UPPER(symbol) = UPPER(?)")} LIMIT 1`,
-      [normalizedSymbol]
-    );
+    const [latestResult, historyResult, documentResult, analysisResult, hftResult] =
+      await db.batch(
+        [
+          {
+            sql: `${latestSummarySql("WHERE symbol = ?")} LIMIT 1`,
+            args: [normalizedSymbol],
+          },
+          {
+            sql: `
+              SELECT
+                id,
+                symbol,
+                name,
+                price,
+                price_text,
+                change,
+                change_text,
+                change_percent,
+                change_percent_text,
+                previous_close_text,
+                open_text,
+                day_range_text,
+                market_cap_text,
+                volume_text,
+                fetched_at,
+                source_url,
+                stats_json,
+                0 AS history_count,
+                0 AS document_count,
+                0 AS analysis_count,
+                NULL AS latest_recommendation,
+                NULL AS latest_analysis_status,
+                0 AS hft_count,
+                NULL AS latest_hft_decision,
+                NULL AS latest_hft_status,
+                NULL AS latest_hft_confidence,
+                NULL AS latest_hft_market_regime
+              FROM stock_history
+              WHERE symbol = ?
+              ORDER BY fetched_at DESC, id DESC
+              LIMIT 24
+            `,
+            args: [normalizedSymbol],
+          },
+          {
+            sql: `
+              SELECT
+                id,
+                captured_at,
+                title,
+                source_url,
+                body_char_count,
+                was_truncated,
+                substr(body_text, 1, 1400) AS body_preview
+              FROM stock_documents
+              WHERE symbol = ?
+              ORDER BY captured_at DESC, id DESC
+              LIMIT 5
+            `,
+            args: [normalizedSymbol],
+          },
+          {
+            sql: `
+              SELECT
+                id,
+                created_at,
+                provider,
+                model,
+                status,
+                recommendation,
+                input_char_count,
+                output_char_count,
+                analysis_text,
+                error_text
+              FROM stock_analyses
+              WHERE symbol = ?
+              ORDER BY created_at DESC, id DESC
+              LIMIT 5
+            `,
+            args: [normalizedSymbol],
+          },
+          {
+            sql: `
+              SELECT
+                id,
+                created_at,
+                provider,
+                model,
+                status,
+                decision,
+                confidence,
+                market_regime,
+                analysis_text,
+                error_text
+              FROM stock_hft_analyses
+              WHERE symbol = ?
+              ORDER BY created_at DESC, id DESC
+              LIMIT 5
+            `,
+            args: [normalizedSymbol],
+          },
+        ],
+        "read"
+      );
+    const latestRow = latestResult.rows[0] as unknown as StockSummaryRow | undefined;
 
     if (!latestRow) {
       return null;
     }
 
-    const historyRows = await allRows<StockSummaryRow>(
-      db,
-      `
-        SELECT
-          id,
-          symbol,
-          name,
-          price,
-          price_text,
-          change,
-          change_text,
-          change_percent,
-          change_percent_text,
-          previous_close_text,
-          open_text,
-          day_range_text,
-          market_cap_text,
-          volume_text,
-          fetched_at,
-          source_url,
-          stats_json,
-          0 AS history_count,
-          0 AS document_count,
-          0 AS analysis_count,
-          NULL AS latest_recommendation,
-          NULL AS latest_analysis_status,
-          0 AS hft_count,
-          NULL AS latest_hft_decision,
-          NULL AS latest_hft_status,
-          NULL AS latest_hft_confidence,
-          NULL AS latest_hft_market_regime
-        FROM stock_history
-        WHERE UPPER(symbol) = UPPER(?)
-        ORDER BY fetched_at DESC, id DESC
-        LIMIT 24
-      `,
-      [normalizedSymbol]
-    );
+    const historyRows = historyResult.rows as unknown as StockSummaryRow[];
     const priceHistory = [...historyRows]
       .reverse()
       .map((row) => ({ fetchedAt: row.fetched_at, price: Number(row.price) }));
-    const documentRows = await allRows<StockDocumentRow>(
-      db,
-      `
-        SELECT
-          id,
-          captured_at,
-          title,
-          source_url,
-          body_char_count,
-          was_truncated,
-          substr(body_text, 1, 1400) AS body_preview
-        FROM stock_documents
-        WHERE UPPER(symbol) = UPPER(?)
-        ORDER BY captured_at DESC, id DESC
-        LIMIT 5
-      `,
-      [normalizedSymbol]
-    );
-    const analysisRows = await allRows<StockAnalysisRow>(
-      db,
-      `
-        SELECT
-          id,
-          created_at,
-          provider,
-          model,
-          status,
-          recommendation,
-          input_char_count,
-          output_char_count,
-          analysis_text,
-          error_text
-        FROM stock_analyses
-        WHERE UPPER(symbol) = UPPER(?)
-        ORDER BY created_at DESC, id DESC
-        LIMIT 5
-      `,
-      [normalizedSymbol]
-    );
-    const hftRows = await allRows<StockHftAnalysisRow>(
-      db,
-      `
-        SELECT
-          id,
-          created_at,
-          provider,
-          model,
-          status,
-          decision,
-          confidence,
-          market_regime,
-          analysis_text,
-          error_text
-        FROM stock_hft_analyses
-        WHERE UPPER(symbol) = UPPER(?)
-        ORDER BY created_at DESC, id DESC
-        LIMIT 5
-      `,
-      [normalizedSymbol]
-    );
+    const documentRows = documentResult.rows as unknown as StockDocumentRow[];
+    const analysisRows = analysisResult.rows as unknown as StockAnalysisRow[];
+    const hftRows = hftResult.rows as unknown as StockHftAnalysisRow[];
 
     return {
       latest: {

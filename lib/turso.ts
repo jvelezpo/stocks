@@ -156,6 +156,9 @@ export function ensureStockSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_stock_history_symbol_fetched_at
         ON stock_history (symbol, fetched_at);
 
+      CREATE INDEX IF NOT EXISTS idx_stock_history_symbol_fetched_id
+        ON stock_history (symbol, fetched_at DESC, id DESC);
+
       CREATE TABLE IF NOT EXISTS stock_documents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         stock_history_id INTEGER NOT NULL,
@@ -171,6 +174,9 @@ export function ensureStockSchema(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_stock_documents_symbol_captured_at
         ON stock_documents (symbol, captured_at);
+
+      CREATE INDEX IF NOT EXISTS idx_stock_documents_symbol_captured_id
+        ON stock_documents (symbol, captured_at DESC, id DESC);
 
       CREATE TABLE IF NOT EXISTS stock_analyses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,6 +203,9 @@ export function ensureStockSchema(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_stock_analyses_symbol_created_at
         ON stock_analyses (symbol, created_at);
+
+      CREATE INDEX IF NOT EXISTS idx_stock_analyses_symbol_created_id
+        ON stock_analyses (symbol, created_at DESC, id DESC);
 
       CREATE INDEX IF NOT EXISTS idx_stock_analyses_recommendation
         ON stock_analyses (recommendation);
@@ -229,6 +238,9 @@ export function ensureStockSchema(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_stock_hft_analyses_symbol_created_at
         ON stock_hft_analyses (symbol, created_at);
+
+      CREATE INDEX IF NOT EXISTS idx_stock_hft_analyses_symbol_created_id
+        ON stock_hft_analyses (symbol, created_at DESC, id DESC);
 
       CREATE INDEX IF NOT EXISTS idx_stock_hft_analyses_decision
         ON stock_hft_analyses (decision);
@@ -305,6 +317,23 @@ export function ensureStockSchema(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_stock_reddit_analyses_symbol_created_at
         ON stock_reddit_analyses (symbol, created_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS polymarket_market_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        captured_at TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        stock_name TEXT NOT NULL,
+        event_text TEXT NOT NULL,
+        market_text TEXT NOT NULL,
+        outcomes_json TEXT NOT NULL,
+        volume REAL,
+        liquidity REAL,
+        end_date TEXT NOT NULL,
+        source_url TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_polymarket_snapshots_symbol_volume
+        ON polymarket_market_snapshots (symbol, volume DESC, id DESC);
 
       CREATE TABLE IF NOT EXISTS stock_chat_sessions (
         id TEXT PRIMARY KEY,

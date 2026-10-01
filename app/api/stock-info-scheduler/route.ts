@@ -1,10 +1,10 @@
-import { startStockInfoScheduler } from "../../../lib/stock-info-scheduler";
+import { getStockInfoSchedulerState } from "../../../lib/stock-info-scheduler";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export function GET(): Response {
-  const state = startStockInfoScheduler();
+  const state = getStockInfoSchedulerState();
 
   return Response.json({
     started: state.started,

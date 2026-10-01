@@ -670,7 +670,7 @@ async function ownedSession(
       ${sessionSummarySql}
       WHERE session.id = ?
         AND session.visitor_hash = ?
-        AND UPPER(session.symbol) = UPPER(?)
+        AND session.symbol = ?
       LIMIT 1
     `,
     [sessionId, visitorHash, symbol]
@@ -737,7 +737,7 @@ async function assertStockViewExists(symbol: string): Promise<void> {
     `
       SELECT COUNT(*) AS count
       FROM stock_history
-      WHERE UPPER(symbol) = UPPER(?)
+      WHERE symbol = ?
       LIMIT 1
     `,
     [symbol]
@@ -759,7 +759,7 @@ export async function listChatSessions(
     `
       ${sessionSummarySql}
       WHERE session.visitor_hash = ?
-        AND UPPER(session.symbol) = UPPER(?)
+        AND session.symbol = ?
       ORDER BY session.updated_at DESC, session.id DESC
       LIMIT ?
     `,
@@ -834,7 +834,7 @@ export async function createChatSession(
       `
         SELECT COUNT(*) AS count
         FROM stock_chat_sessions
-        WHERE visitor_hash = ? AND UPPER(symbol) = UPPER(?)
+        WHERE visitor_hash = ? AND symbol = ?
       `,
       [visitorHash, symbol]
     );
@@ -1173,7 +1173,7 @@ async function claimTurn(
           updated_at = ?
         WHERE id = ?
           AND visitor_hash = ?
-          AND UPPER(symbol) = UPPER(?)
+          AND symbol = ?
           AND status = 'idle'
       `,
       args: [
@@ -1426,7 +1426,7 @@ async function completeTurn(
           updated_at = ?
         WHERE id = ?
           AND visitor_hash = ?
-          AND UPPER(symbol) = UPPER(?)
+          AND symbol = ?
           AND status = 'processing'
           AND active_turn_id = ?
       `,
@@ -1526,7 +1526,7 @@ async function failTurn(
           updated_at = ?
         WHERE id = ?
           AND visitor_hash = ?
-          AND UPPER(symbol) = UPPER(?)
+          AND symbol = ?
           AND status = 'processing'
           AND active_turn_id = ?
       `,
