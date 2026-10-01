@@ -59,6 +59,12 @@ async function addMissingColumns(
 }
 
 async function ensureRedditSchemaMigrations(): Promise<void> {
+  await addMissingColumns("stock_reddit_analyses", [
+    {
+      name: "market_count",
+      sql: "market_count INTEGER NOT NULL DEFAULT 0",
+    },
+  ]);
   await addMissingColumns("reddit_posts", [
     {
       name: "analysis_status",
@@ -291,6 +297,7 @@ export function ensureStockSchema(): Promise<void> {
         symbol TEXT NOT NULL,
         instruction_text TEXT NOT NULL,
         post_count INTEGER NOT NULL,
+        market_count INTEGER NOT NULL DEFAULT 0,
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
         analysis_text TEXT NOT NULL

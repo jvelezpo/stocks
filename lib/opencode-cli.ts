@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 export const DEFAULT_OPENCODE_MODEL = "muse-spark-1.3-contributor-free";
 export const DEFAULT_OPENCODE_CLI = "opencode";
+export const DEFAULT_LLM_MAX_OUTPUT_TOKENS = 600;
 const OPENCODE_VARIANT = "minimal";
 
 export type OpencodeCliOptions = {

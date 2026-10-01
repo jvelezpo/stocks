@@ -36,6 +36,17 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
         overall_sentiment TEXT NOT NULL
       );
 
+      CREATE TABLE stock_reddit_analyses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        instruction_text TEXT NOT NULL,
+        post_count INTEGER NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        analysis_text TEXT NOT NULL
+      );
+
       INSERT INTO reddit_posts (
         reddit_post_id,
         discovered_at,
@@ -77,8 +88,14 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
     const stateColumns = await turso.execute(
       "PRAGMA table_info(reddit_monitor_state)"
     );
+    const stockAnalysisColumns = await turso.execute(
+      "PRAGMA table_info(stock_reddit_analyses)"
+    );
     const postColumnNames = new Set(postColumns.rows.map((row) => row.name));
     const stateColumnNames = new Set(stateColumns.rows.map((row) => row.name));
+    const stockAnalysisColumnNames = new Set(
+      stockAnalysisColumns.rows.map((row) => row.name)
+    );
     const migratedPost = await turso.execute({
       sql: `
         SELECT analysis_status, sentiment_analysis_id
@@ -93,6 +110,7 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
     assert.equal(postColumnNames.has("analysis_started_at"), true);
     assert.equal(postColumnNames.has("sentiment_analysis_id"), true);
     assert.equal(stateColumnNames.has("last_seen_posted_at"), true);
+    assert.equal(stockAnalysisColumnNames.has("market_count"), true);
     assert.equal(migratedPost.rows[0]?.analysis_status, "completed");
     assert.equal(Number(migratedPost.rows[0]?.sentiment_analysis_id), 1);
   } finally {

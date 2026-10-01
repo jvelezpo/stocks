@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { MarketStatusBadge } from "../components/MarketStatusBadge";
 import { PageHeader } from "../components/PageHeader";
+import { PolymarketSignals } from "../components/PolymarketSignals";
 import { RedditSentimentRefreshButton } from "../components/RedditSentimentRefreshButton";
 import { RedditPostLinksButton } from "../components/RedditPostLinksButton";
 import { Sparkline } from "../components/Sparkline";
@@ -18,6 +19,7 @@ import {
   getRedditStockMentionLists,
   type RedditStockMention,
 } from "../lib/reddit";
+import { getPolymarketStockMarketGroups } from "../lib/stock-reddit-analysis";
 import { getStockSummaries } from "../lib/stocks";
 
 export const dynamic = "force-dynamic";
@@ -164,14 +166,19 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const redditKeyword = parseRedditKeyword(resolvedSearchParams.keyword);
   const redditTimeframe = parseRedditTimeframe(resolvedSearchParams.timeframe);
   const redditSince = sinceForTimeframe(redditTimeframe);
-  const [stocks, redditAnalyses, redditStockMentions, session] = await Promise.all([
-    getStockSummaries(),
+  const stocksPromise = getStockSummaries();
+  const polymarketGroupsPromise = stocksPromise.then((stocks) =>
+    getPolymarketStockMarketGroups(stocks, 3)
+  );
+  const [stocks, redditAnalyses, redditStockMentions, polymarketGroups, session] = await Promise.all([
+    stocksPromise,
     getRedditSentimentAnalyses({
       keyword: redditKeyword,
       since: redditSince,
       limit: 12,
     }),
     getRedditStockMentionLists({ since: redditSince, limit: 5 }),
+    polymarketGroupsPromise,
     sessionToken ? verifySessionToken(sessionToken) : null,
   ]);
   const isAdmin = Boolean(session && hasRole(session.user.role, "admin"));
@@ -480,6 +487,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           )}
         </div>
       </section>
+
+      <PolymarketSignals groups={polymarketGroups} />
 
       <section className="mx-auto max-w-7xl px-5 pb-10 sm:px-8 lg:px-10">
         <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-soft">

@@ -625,10 +625,10 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
           <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-soft">
             <div className="flex items-center gap-2 text-sm text-zinc-500">
               <MessageSquareText className="h-4 w-4 text-orange-600" />
-              Reddit research
+              Reddit + Polymarket research
             </div>
             <h2 className="mt-2 text-2xl font-semibold text-zinc-950">
-              Recent WallStreetBets analyses
+              Recent market sentiment analyses
             </h2>
             <div className="mt-5 space-y-4">
               {redditAnalyses.map((analysis) => (
@@ -640,6 +640,8 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
                     <span>{formatDateTime(analysis.createdAt)}</span>
                     <span>
                       {analysis.postCount} Reddit {analysis.postCount === 1 ? "post" : "posts"}
+                      {" · "}
+                      {analysis.marketCount} Polymarket {analysis.marketCount === 1 ? "market" : "markets"}
                     </span>
                   </div>
                   <div className="mt-3 text-sm font-semibold text-zinc-950">
@@ -647,6 +649,17 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
                   </div>
                   <div className="mt-3 whitespace-pre-wrap break-words border-l-2 border-orange-200 pl-4 text-sm leading-6 text-zinc-700">
                     {analysis.analysisText}
+                  </div>
+                  <div className="mt-3 text-xs text-zinc-500">
+                    Sources: Reddit +{" "}
+                    <a
+                      className="font-medium text-zinc-700 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-950"
+                      href={`https://polymarket.com/predictions/${encodeURIComponent(analysis.symbol.toLowerCase())}`}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      Polymarket
+                    </a>
                   </div>
                   <div className="mt-3 text-xs text-zinc-500">Model: {analysis.model}</div>
                 </article>

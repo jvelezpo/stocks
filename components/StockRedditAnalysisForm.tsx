@@ -19,7 +19,7 @@ export function StockRedditAnalysisForm({ symbol }: StockRedditAnalysisFormProps
     event.preventDefault();
     setIsRunning(true);
     setIsError(false);
-    setMessage(`Reading Reddit and analyzing ${symbol}…`);
+    setMessage(`Reading Reddit and Polymarket, then analyzing ${symbol}…`);
 
     try {
       const response = await fetch(
@@ -32,15 +32,15 @@ export function StockRedditAnalysisForm({ symbol }: StockRedditAnalysisFormProps
       );
       const data = (await response.json()) as { error?: string };
       if (!response.ok) {
-        throw new Error(data.error ?? "Could not run Reddit analysis.");
+        throw new Error(data.error ?? "Could not run research analysis.");
       }
 
       setInstruction("");
-      setMessage("Reddit analysis completed.");
+      setMessage("Reddit + Polymarket analysis completed.");
       router.refresh();
     } catch (error: unknown) {
       setIsError(true);
-      setMessage(error instanceof Error ? error.message : "Could not run Reddit analysis.");
+      setMessage(error instanceof Error ? error.message : "Could not run research analysis.");
     } finally {
       setIsRunning(false);
     }
@@ -53,14 +53,14 @@ export function StockRedditAnalysisForm({ symbol }: StockRedditAnalysisFormProps
     >
       <div className="flex items-center gap-2 text-sm font-medium text-orange-800">
         <MessageSquareText className="h-4 w-4" />
-        Admin Reddit analysis
+        Admin research analysis
       </div>
       <h2 className="mt-2 text-2xl font-semibold text-zinc-950">
-        Analyze current discussion about {symbol}
+        Analyze current discussion and prediction markets for {symbol}
       </h2>
       <p className="mt-2 text-sm leading-6 text-zinc-600">
-        Leave the question empty to ask whether the current discussion supports buying,
-        holding, or selling {symbol}.
+        Leave the question empty to ask whether current Reddit discussion and Polymarket
+        odds support buying, holding, or selling {symbol}.
       </p>
       <label className="mt-4 block text-sm font-medium text-zinc-700" htmlFor="reddit-analysis-instruction">
         Analysis question or instructions (optional)
@@ -71,7 +71,7 @@ export function StockRedditAnalysisForm({ symbol }: StockRedditAnalysisFormProps
         id="reddit-analysis-instruction"
         maxLength={2000}
         onChange={(event) => setInstruction(event.target.value)}
-        placeholder={`What should we understand about Reddit sentiment for ${symbol}?`}
+        placeholder={`What should we understand about Reddit and Polymarket signals for ${symbol}?`}
         value={instruction}
       />
       <div className="mt-3 flex flex-wrap items-center gap-3">

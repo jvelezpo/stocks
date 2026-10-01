@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { ensureStockSchema, turso } from "./lib/turso.ts";
 import { getCollectorSymbols } from "./lib/symbols.ts";
 import {
+  DEFAULT_LLM_MAX_OUTPUT_TOKENS,
   DEFAULT_OPENCODE_MODEL,
   resolveOpencodeCliPath,
   runOpencodePrompt,
@@ -177,7 +178,10 @@ function getLlmConfig(): LlmConfig | null {
     provider: "opencode",
     model,
     cliPath: resolveOpencodeCliPath(),
-    maxOutputTokens: parsePositiveIntegerEnv("LLM_MAX_OUTPUT_TOKENS", 1200),
+    maxOutputTokens: parsePositiveIntegerEnv(
+      "LLM_MAX_OUTPUT_TOKENS",
+      DEFAULT_LLM_MAX_OUTPUT_TOKENS
+    ),
     timeoutMs: parsePositiveIntegerEnv("LLM_TIMEOUT_MS", 60000),
   };
 }
@@ -264,7 +268,7 @@ async function runLlmAnalysis(
   // within OpenCode instead of via a direct Responses API call (which the
   // free tier rejects with 403). The prompt is piped via stdin.
   const result = await runOpencodePrompt(
-    `${prompt}\n\nDo not use any tools. Reply with the requested output only.`,
+    `${prompt}\n\nDo not use any tools. Reply with the requested output only. Keep it compact, omit repetition, and include no background beyond what the requested format requires.`,
     {
       model: config.model,
       timeoutMs: config.timeoutMs,

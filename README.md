@@ -77,7 +77,7 @@ LLM analysis runs through the local Opencode CLI (`opencode run --format json`).
 | `OPENCODE_CLI_PATH` | No | Path to the Opencode CLI binary. Defaults to `opencode`. |
 | `OPENCODE_DISABLED` | No | Set to `true` (or `OPENCODE_MODEL=none`) to skip LLM analysis. |
 | `LLM_DOCUMENT_MAX_CHARS` | No | Max captured page text sent to analysis. Defaults to `50000`. |
-| `LLM_MAX_OUTPUT_TOKENS` | No | Max analysis output tokens. Defaults to `1200`. |
+| `LLM_MAX_OUTPUT_TOKENS` | No | Max AI response tokens. Defaults to `600`. |
 | `LLM_TIMEOUT_MS` | No | LLM request timeout. Defaults to `60000`. |
 | `STOCK_CHAT_RATE_LIMIT_SALT` | No | Secret used to hash network rate-limit keys for stock chat. Defaults to the Turso auth token. |
 | `STOCK_CHAT_TRUST_PROXY_HEADERS` | No | Set to `true` only when a trusted edge proxy overwrites forwarded client-IP headers; enables per-network chat limits. |

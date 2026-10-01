@@ -48,7 +48,7 @@ export async function POST(
 
     console.error("[stock-reddit-analysis] Request failed.", error);
     return NextResponse.json(
-      { error: "The Reddit analysis could not be completed." },
+      { error: "The Reddit + Polymarket analysis could not be completed." },
       { status: 500 }
     );
   }

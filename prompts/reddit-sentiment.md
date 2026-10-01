@@ -6,8 +6,10 @@ Return only one valid JSON object with exactly this shape:
 
 {
   "overall_sentiment": "positive | negative | neutral",
-  "summary": "A concise summary of the batch sentiment.",
-  "trends": ["Up to five notable trends or recurring patterns."]
+  "summary": "Maximum 40 words summarizing the batch sentiment.",
+  "trends": ["Up to three trends, each no more than 12 words."]
 }
 
 Use "positive" when bullish or buying/long conviction dominates, "negative" when bearish or selling/short conviction dominates, and "neutral" when discussion is balanced, unclear, or mostly informational.
+
+Do not repeat the summary in the trends or add commentary outside the JSON object.

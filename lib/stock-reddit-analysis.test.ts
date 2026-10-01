@@ -2,20 +2,22 @@ import assert from "node:assert/strict";
 import { unlink } from "node:fs/promises";
 import test from "node:test";
 
-test("runs per-symbol Reddit analysis and returns only the latest five", async () => {
+test("treats Reddit and Polymarket as optional sources and returns only the latest five", async () => {
   const databasePath = `/private/tmp/stock-reddit-analysis-test-${process.pid}-${Date.now()}.db`;
   process.env.TURSO_DATABASE_URL = `file:${databasePath}`;
   process.env.TURSO_AUTH_TOKEN = "test-token";
   process.env.OPENCODE_MODEL = "muse-spark-1.3-contributor-free";
 
   const { ensureStockSchema, turso } = await import("./turso.ts");
-  const { getStockRedditAnalyses, runStockRedditAnalysis } = await import(
-    "./stock-reddit-analysis.ts"
-  );
+  const {
+    getPolymarketStockMarketGroups,
+    getStockRedditAnalyses,
+    runStockRedditAnalysis,
+  } = await import("./stock-reddit-analysis.ts");
   const globals = globalThis as Record<string, unknown>;
   const prompts: string[] = [];
 
-  globals.__stockRedditPostsMock = async (symbol: string) => [
+  const redditPostsMock = async (symbol: string) => [
     {
       redditPostId: `post-${symbol.toLowerCase()}`,
       subreddit: "wallstreetbets",
@@ -28,6 +30,31 @@ test("runs per-symbol Reddit analysis and returns only the latest five", async (
       matchedKeywords: ["buy"],
     },
   ];
+  const polymarketEventsMock = async () => [
+    {
+      id: "event-test",
+      slug: "which-companies-will-the-us-take-a-stake-in",
+      title: "Which companies will the US take a stake in?",
+      active: true,
+      closed: false,
+      markets: [
+        {
+          id: "market-test",
+          question: "Will the US take a stake in Test Corporation?",
+          groupItemTitle: "Test Corporation",
+          outcomes: '["Yes", "No"]',
+          outcomePrices: '["0.31", "0.69"]',
+          volumeNum: 1234,
+          liquidityNum: 567,
+          endDate: "2026-12-31T00:00:00Z",
+          active: true,
+          closed: false,
+        },
+      ],
+    },
+  ];
+  globals.__stockRedditPostsMock = redditPostsMock;
+  globals.__stockPolymarketEventsMock = polymarketEventsMock;
   globals.__opencodeCliMock = async (prompt: string) => {
     prompts.push(prompt);
     return {
@@ -86,20 +113,58 @@ test("runs per-symbol Reddit analysis and returns only the latest five", async (
     const first = await runStockRedditAnalysis("test", "Focus on downside risks.");
     assert.equal(first.instruction, "Focus on downside risks.");
     assert.equal(first.postCount, 1);
+    assert.equal(first.marketCount, 1);
     assert.match(prompts[0], /Admin request: Focus on downside risks\./);
     assert.match(prompts[0], /Test Corporation/);
+    assert.match(prompts[0], /Polymarket markets JSON/);
+    assert.match(prompts[0], /which-companies-will-the-us-take-a-stake-in/);
+    assert.match(prompts[0], /180 words or fewer/);
+
+    const marketGroups = await getPolymarketStockMarketGroups([
+      { symbol: "TEST", name: "Test Corporation" },
+    ]);
+    assert.equal(marketGroups.length, 1);
+    assert.equal(marketGroups[0]?.symbol, "TEST");
+    assert.equal(marketGroups[0]?.markets[0]?.outcomes[0]?.probability, 0.31);
+
+    globals.__stockRedditPostsMock = async () => {
+      throw new Error("Reddit unavailable");
+    };
+    const polymarketOnly = await runStockRedditAnalysis("TEST", "");
+    assert.equal(polymarketOnly.postCount, 0);
+    assert.equal(polymarketOnly.marketCount, 1);
+
+    globals.__stockRedditPostsMock = redditPostsMock;
+    globals.__stockPolymarketEventsMock = async () => {
+      throw new Error("Polymarket unavailable");
+    };
+    const redditOnly = await runStockRedditAnalysis("TEST", "");
+    assert.equal(redditOnly.postCount, 1);
+    assert.equal(redditOnly.marketCount, 0);
+
+    globals.__stockRedditPostsMock = async () => [];
+    globals.__stockPolymarketEventsMock = async () => [];
+    await assert.rejects(
+      runStockRedditAnalysis("TEST", ""),
+      /No recent Reddit posts or active Polymarket markets were found for TEST\./
+    );
+
+    globals.__stockRedditPostsMock = redditPostsMock;
+    globals.__stockPolymarketEventsMock = polymarketEventsMock;
 
     for (let index = 0; index < 5; index += 1) {
       await runStockRedditAnalysis("TEST", "");
     }
 
     assert.match(prompts[1], /buy, hold, or sell TEST/i);
+    assert.match(prompts[1], /Polymarket odds/i);
     const latest = await getStockRedditAnalyses("TEST");
     assert.equal(latest.length, 5);
-    assert.equal(latest[0]?.analysisText, "Analysis 6");
-    assert.equal(latest.at(-1)?.analysisText, "Analysis 2");
+    assert.equal(latest[0]?.analysisText, "Analysis 8");
+    assert.equal(latest.at(-1)?.analysisText, "Analysis 4");
   } finally {
     delete globals.__stockRedditPostsMock;
+    delete globals.__stockPolymarketEventsMock;
     delete globals.__opencodeCliMock;
     delete globals.__stockRedditAnalysisRuns;
     turso.close();

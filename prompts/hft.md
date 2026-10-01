@@ -82,11 +82,11 @@ Output schema:
       "name": "string",
       "direction": "bullish | bearish | neutral",
       "strength": 0.0,
-      "evidence": "string"
+      "evidence": "max 15 words"
     }
   ],
   "key_factors": [
-    "string"
+    "max 12 words"
   ],
   "risk_checks": {
     "data_quality_ok": true,
@@ -103,9 +103,9 @@ Output schema:
     "stop_loss": "number or null",
     "take_profit": "number or null",
     "time_horizon_seconds": 0,
-    "invalidate_if": "string"
+    "invalidate_if": "max 15 words"
   },
-  "reasoning_summary": "max 80 words, concise and evidence-based"
+  "reasoning_summary": "max 35 words, concise and evidence-based"
 }
 
 Behavior constraints:
@@ -115,3 +115,4 @@ Behavior constraints:
 - If a pattern is detected, tie it to observable inputs.
 - Favor precision over activity.
 - Keep reasoning short, structured, and machine-readable.
+- Return at most 3 patterns and 4 key factors. Avoid repeating evidence between fields.

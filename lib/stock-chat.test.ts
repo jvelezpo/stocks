@@ -11,6 +11,7 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
   process.env.OPENCODE_MODEL = "muse-spark-1.3-contributor-free";
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.OPENROUTER_MODEL;
+  delete process.env.LLM_MAX_OUTPUT_TOKENS;
   process.env.LLM_TIMEOUT_MS = "5000";
 
   const { ensureStockSchema, turso } = await import("./turso.ts");
@@ -104,14 +105,16 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
 
     (globalThis as Record<string, unknown>).__opencodeCliMock = (async (
       prompt: string,
-      options: { model?: string }
+      options: { model?: string; maxOutputTokens?: number }
     ) => {
       opencodeCallCount += 1;
 
       assert.equal(options.model, "muse-spark-1.3-contributor-free");
+      assert.equal(options.maxOutputTokens, 600);
       assert.match(prompt, /Test Corporation/);
       assert.match(prompt, /STOCK_VIEW_DATA_START/);
       assert.match(prompt, /What changed in the latest capture\?/);
+      assert.match(prompt, /120 words or fewer/);
       notifyRequestStarted?.();
       await replyReleased;
 

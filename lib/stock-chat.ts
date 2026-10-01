@@ -9,6 +9,7 @@ import type { NextRequest } from "next/server";
 import { getStockDetail, type StockDetail } from "./stocks.ts";
 import { ensureStockSchema, turso } from "./turso.ts";
 import {
+  DEFAULT_LLM_MAX_OUTPUT_TOKENS,
   DEFAULT_OPENCODE_MODEL,
   resolveOpencodeCliPath,
   runOpencodePrompt,
@@ -224,7 +225,10 @@ function opencodeConfig(): OpencodeConfig {
   return {
     model,
     cliPath: resolveOpencodeCliPath(),
-    maxOutputTokens: positiveIntegerEnv("LLM_MAX_OUTPUT_TOKENS", 1_200),
+    maxOutputTokens: positiveIntegerEnv(
+      "LLM_MAX_OUTPUT_TOKENS",
+      DEFAULT_LLM_MAX_OUTPUT_TOKENS
+    ),
     timeoutMs: positiveIntegerEnv("LLM_TIMEOUT_MS", 60_000),
   };
 }
@@ -1373,6 +1377,7 @@ function buildChatPrompt(
     "Assistant:",
     "",
     "Do not use any tools. Answer using the dashboard data above. Reply with the assistant message text only.",
+    "Answer directly in 120 words or fewer. Prefer one short paragraph or at most five brief bullets. Do not restate the question or repeat the same point. Exceed the limit only when the user explicitly requests necessary detail.",
   ].join("\n");
 }
 
