@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ['192.168.40.226', 'stocks.m14.pro'],
   outputFileTracingIncludes: {
     "/*": [
       "./stock-info.ts",
