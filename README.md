@@ -124,13 +124,11 @@ Build for production:
 npm run build
 ```
 
-Start the production dashboard after building:
+Start the production API and background workers after building:
 
 ```bash
-npm run dashboard:start
+npm start
 ```
-
-Run `npm run workers:start` as a separate long-lived process in production.
 
 ## Background Collection
 
@@ -183,6 +181,7 @@ npm run reddit:sentiment # run one Reddit sentiment pass
 npm test             # run Reddit validation unit tests
 npm run typecheck    # run TypeScript checks
 npm run build        # production build
+npm start            # run the production API plus workers
 ```
 
 ## Notes

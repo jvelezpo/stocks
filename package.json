@@ -8,7 +8,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:web": "next dev --port 5000",
     "build": "next build",
-    "start": "next start --port 5000",
+    "start": "node scripts/start.mjs",
     "dashboard:start": "next start",
     "workers:dev": "node scripts/watch-workers.mjs",
     "workers:start": "node --env-file=.env workers.ts",
