@@ -3,7 +3,23 @@ FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
-ENV NEXT_TELEMETRY_DISABLED=1
+# Builder only needs the JS deps for `next build`, not the ~400MB Chrome
+# binary. Skipping the Puppeteer postinstall download here avoids requiring
+# `unzip` in this stage and speeds up builds. The runner stage downloads it.
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    PUPPETEER_SKIP_DOWNLOAD=1
+
+# Build-time dummies: `next build` imports every route, and compose
+# `env_file` is runtime-only (plus `.env` is dockerignored), so the real
+# secrets are not available here. The turso client is lazy and never connects
+# during the build, but these guards keep any other eager env read from
+# failing the build. Real values come from `env_file: .env` at runtime.
+ARG TURSO_DATABASE_URL="file::memory:?cache=shared"
+ARG TURSO_AUTH_TOKEN="build-only-dummy-token"
+ARG AUTH_SECRET="build-only-dummy-secret-at-least-32-chars"
+ENV TURSO_DATABASE_URL=$TURSO_DATABASE_URL \
+    TURSO_AUTH_TOKEN=$TURSO_AUTH_TOKEN \
+    AUTH_SECRET=$AUTH_SECRET
 
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -21,6 +37,7 @@ ENV NODE_ENV=production \
     PORT=5000
 
 # Runtime libraries required by Puppeteer's bundled chrome-headless-shell.
+# `unzip` is required by @puppeteer/browsers to extract Chrome during `npm ci`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -58,6 +75,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxss1 \
     libxtst6 \
     lsb-release \
+    unzip \
     wget \
     xdg-utils \
   && rm -rf /var/lib/apt/lists/*
