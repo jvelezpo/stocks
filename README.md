@@ -85,6 +85,29 @@ LLM analysis runs through the local Opencode CLI (`opencode run --format json`).
 | `REDDIT_TIMEOUT_MS` | No | Puppeteer page navigation and rendered-content timeout for Reddit monitoring. Defaults to `60000`. |
 | `POLYMARKET_TIMEOUT_MS` | No | Polymarket request timeout. Defaults to `60000`. |
 
+## Docker
+
+Run the dashboard plus background workers with a single command in the background:
+
+```bash
+cp .env.example .env  # fill in TURSO_*, AUTH_SECRET, ADMIN_EMAILS, RESEND_*
+docker compose up -d --build
+```
+
+Open `http://localhost:5000`. Other commands:
+
+```bash
+docker compose logs -f        # follow web + worker logs
+docker compose ps             # status / health
+docker compose down           # stop and remove the container
+```
+
+Notes:
+
+- The image runs `node scripts/start.mjs` (Next.js on `PORT`, default `5000`, plus the workers).
+- Puppeteer runs with `--no-sandbox`; compose sets `shm_size: 1gb` so headless Chrome has enough shared memory.
+- The `opencode` CLI is not bundled in the image. Quote/Reddit collection still runs without it; set `OPENCODE_DISABLED=true` in `.env` to silence the CLI-missing errors, or provide the CLI via `OPENCODE_CLI_PATH`.
+
 ## Running
 
 Start the dashboard and hot-reloading workers together:

@@ -1,0 +1,22 @@
+# Single-command background run: `docker compose up -d --build`
+# Dashboard: http://localhost:5000
+#
+# Requires a `.env` file next to this compose file (see `.env.example`).
+# Puppeteer needs shared memory in Docker, hence `shm_size`.
+services:
+  app:
+    build: .
+    image: stocks:latest
+    container_name: stocks
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      PORT: "5000"
+      # LLM analysis runs through the local `opencode` CLI, which is not
+      # bundled in the image. Quote/Reddit collection still runs without it,
+      # but uncomment to silence the CLI-missing errors:
+      # OPENCODE_DISABLED: "true"
+    restart: unless-stopped
+    shm_size: 1gb

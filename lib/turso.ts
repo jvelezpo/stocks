@@ -1,4 +1,4 @@
-import { createClient } from "@libsql/client";
+import { createClient, type Client } from "@libsql/client";
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -10,9 +10,34 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-export const turso = createClient({
-  url: requiredEnv("TURSO_DATABASE_URL"),
-  authToken: requiredEnv("TURSO_AUTH_TOKEN"),
+// Lazily create the client on first use instead of at import time.
+// `next build` imports every route module to collect page data, but the
+// builder stage has no `.env` (excluded via .dockerignore) and compose
+// `env_file` only applies at runtime. Eagerly calling requiredEnv() here
+// made the Docker build fail with "Missing required env var
+// TURSO_DATABASE_URL" even for routes marked `dynamic = "force-dynamic"`.
+let cachedClient: Client | null = null;
+
+function getClient(): Client {
+  cachedClient ??= createClient({
+    url: requiredEnv("TURSO_DATABASE_URL"),
+    authToken: requiredEnv("TURSO_AUTH_TOKEN"),
+  });
+
+  return cachedClient;
+}
+
+export const turso: Client = new Proxy({} as Client, {
+  get(_target, prop, _receiver) {
+    // Avoid turning the client into a thenable during module inspection.
+    if (prop === "then") {
+      return undefined;
+    }
+
+    const value = Reflect.get(getClient(), prop);
+
+    return typeof value === "function" ? value.bind(getClient()) : value;
+  },
 });
 
 let schemaPromise: Promise<void> | null = null;
