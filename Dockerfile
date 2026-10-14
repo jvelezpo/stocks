@@ -11,14 +11,15 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 
 # Build-time dummies: `next build` imports every route, and compose
 # `env_file` is runtime-only (plus `.env` is dockerignored), so the real
-# secrets are not available here. The turso client is lazy and never connects
+# secrets are not available here. The libsql client is lazy and never connects
 # during the build, but these guards keep any other eager env read from
-# failing the build. Real values come from `env_file: .env` at runtime.
-ARG TURSO_DATABASE_URL="file::memory:?cache=shared"
-ARG TURSO_AUTH_TOKEN="build-only-dummy-token"
+# failing the build. Real values come from `env_file: .env` at runtime
+# (DATABASE_URL=http://db:8080 inside compose, http://localhost:8080 on host).
+ARG DATABASE_URL="file::memory:?cache=shared"
+ARG DATABASE_AUTH_TOKEN=""
 ARG AUTH_SECRET="build-only-dummy-secret-at-least-32-chars"
-ENV TURSO_DATABASE_URL=$TURSO_DATABASE_URL \
-    TURSO_AUTH_TOKEN=$TURSO_AUTH_TOKEN \
+ENV DATABASE_URL=$DATABASE_URL \
+    DATABASE_AUTH_TOKEN=$DATABASE_AUTH_TOKEN \
     AUTH_SECRET=$AUTH_SECRET
 
 COPY package.json package-lock.json ./

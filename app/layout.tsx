@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Stocks Dashboard",
-  description: "A dashboard for stock quote history, documents, and analysis stored in Turso.",
+  description: "A dashboard for stock quote history, documents, and analysis stored in a local database.",
 };
 
 export default function RootLayout({

@@ -1,5 +1,5 @@
 import type { Client, InArgs } from "@libsql/client";
-import { ensureStockSchema, turso } from "./turso.ts";
+import { ensureStockSchema, database } from "./database.ts";
 import {
   stockChartBucketSeconds,
   stockChartRangeDurationSeconds,
@@ -178,7 +178,7 @@ type StockHftAnalysisRow = {
 async function withDatabase<T>(read: (db: Client) => Promise<T>): Promise<T> {
   await ensureStockSchema();
 
-  return read(turso);
+  return read(database);
 }
 
 async function allRows<T>(

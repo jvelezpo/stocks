@@ -1,6 +1,6 @@
 import { createHash, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import * as jose from "jose";
-import { turso } from "./turso.ts";
+import { database } from "./database.ts";
 
 export const USER_ROLES = ["admin", "user", "guest"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -87,7 +87,7 @@ function safeEqualHex(a: string, b: string): boolean {
 }
 
 export async function ensureAuthSchema(): Promise<void> {
-  await turso.executeMultiple(`
+  await database.executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -156,7 +156,7 @@ function mapUser(row: UserRow): User {
 export async function getUserByEmail(email: string): Promise<User | null> {
   await ensureAuthSchema();
   const normalized = normalizeEmail(email);
-  const result = await turso.execute({
+  const result = await database.execute({
     sql: "SELECT id, email, role, created_at, updated_at, last_login_at, is_active FROM users WHERE email = ? LIMIT 1",
     args: [normalized],
   });
@@ -166,7 +166,7 @@ export async function getUserByEmail(email: string): Promise<User | null> {
 
 export async function getUserById(id: string): Promise<User | null> {
   await ensureAuthSchema();
-  const result = await turso.execute({
+  const result = await database.execute({
     sql: "SELECT id, email, role, created_at, updated_at, last_login_at, is_active FROM users WHERE id = ? LIMIT 1",
     args: [id],
   });
@@ -185,7 +185,7 @@ async function insertUser(email: string, role: UserRole): Promise<User> {
     lastLoginAt: "",
     isActive: true,
   };
-  await turso.execute({
+  await database.execute({
     sql: "INSERT INTO users (id, email, role, created_at, updated_at, last_login_at, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)",
     args: [user.id, user.email, user.role, user.createdAt, user.updatedAt, user.lastLoginAt],
   });
@@ -199,7 +199,7 @@ export async function findOrCreateUser(email: string): Promise<{ user: User; cre
   if (existing) {
     // Auto-promote bootstrap admins on login; never auto-demote.
     if (getAdminEmails().has(normalized) && existing.role !== "admin") {
-      await turso.execute({
+      await database.execute({
         sql: "UPDATE users SET role = 'admin', updated_at = ? WHERE id = ?",
         args: [new Date().toISOString(), existing.id],
       });
@@ -216,7 +216,7 @@ export async function findOrCreateUser(email: string): Promise<{ user: User; cre
 export async function listUsers(limit = 100): Promise<User[]> {
   await ensureAuthSchema();
   const bounded = Math.min(Math.max(limit, 1), 500);
-  const result = await turso.execute({
+  const result = await database.execute({
     sql: "SELECT id, email, role, created_at, updated_at, last_login_at, is_active FROM users ORDER BY created_at DESC LIMIT ?",
     args: [bounded],
   });
@@ -226,7 +226,7 @@ export async function listUsers(limit = 100): Promise<User[]> {
 export async function updateUserRole(userId: string, role: UserRole): Promise<User | null> {
   await ensureAuthSchema();
   if (!isUserRole(role)) throw new Error(`Invalid role: ${role}`);
-  await turso.execute({
+  await database.execute({
     sql: "UPDATE users SET role = ?, updated_at = ? WHERE id = ?",
     args: [role, new Date().toISOString(), userId],
   });
@@ -235,7 +235,7 @@ export async function updateUserRole(userId: string, role: UserRole): Promise<Us
 
 export async function countAdmins(): Promise<number> {
   await ensureAuthSchema();
-  const result = await turso.execute(
+  const result = await database.execute(
     "SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND is_active = 1"
   );
   return Number(result.rows[0]?.count ?? 0);
@@ -254,7 +254,7 @@ export async function requestOtp(email: string): Promise<{ user: User; code: str
   }
 
   const windowStart = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const recent = await turso.execute({
+  const recent = await database.execute({
     sql: "SELECT COUNT(*) AS count FROM auth_otp_codes WHERE email = ? AND created_at >= ?",
     args: [normalized, windowStart],
   });
@@ -266,7 +266,7 @@ export async function requestOtp(email: string): Promise<{ user: User; code: str
   const now = new Date();
   const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000).toISOString();
 
-  await turso.execute({
+  await database.execute({
     sql: "INSERT INTO auth_otp_codes (user_id, email, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
     args: [user.id, normalized, hashOtpCode(code, normalized), expiresAt, now.toISOString()],
   });
@@ -290,7 +290,7 @@ export async function verifyOtp(email: string, code: string): Promise<User> {
   }
 
   const now = new Date().toISOString();
-  const candidate = await turso.execute({
+  const candidate = await database.execute({
     sql: `SELECT id, code_hash, expires_at, consumed_at, attempt_count
           FROM auth_otp_codes
           WHERE email = ? AND consumed_at = '' AND expires_at > ?
@@ -318,7 +318,7 @@ export async function verifyOtp(email: string, code: string): Promise<User> {
   const actual = hashOtpCode(trimmedCode, normalized);
 
   if (!safeEqualHex(expected, actual)) {
-    await turso.execute({
+    await database.execute({
       sql: "UPDATE auth_otp_codes SET attempt_count = attempt_count + 1 WHERE id = ?",
       args: [row.id],
     });
@@ -326,7 +326,7 @@ export async function verifyOtp(email: string, code: string): Promise<User> {
   }
 
   const loginAt = new Date().toISOString();
-  await turso.execute({
+  await database.execute({
     sql: "UPDATE auth_otp_codes SET consumed_at = ?, attempt_count = attempt_count + 1 WHERE id = ?",
     args: [loginAt, row.id],
   });
@@ -335,12 +335,12 @@ export async function verifyOtp(email: string, code: string): Promise<User> {
   let role = user.role;
   if (getAdminEmails().has(normalized) && role !== "admin") {
     role = "admin";
-    await turso.execute({
+    await database.execute({
       sql: "UPDATE users SET role = 'admin', updated_at = ?, last_login_at = ? WHERE id = ?",
       args: [loginAt, loginAt, user.id],
     });
   } else {
-    await turso.execute({
+    await database.execute({
       sql: "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
       args: [loginAt, loginAt, user.id],
     });
@@ -363,7 +363,7 @@ export async function createSessionToken(user: User): Promise<{ token: string; j
   const expiresAt = new Date(now.getTime() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
   await ensureAuthSchema();
-  await turso.execute({
+  await database.execute({
     sql: "INSERT INTO auth_sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
     args: [jti, user.id, now.toISOString(), expiresAt],
   });
@@ -388,7 +388,7 @@ export async function verifySessionToken(token: string): Promise<(SessionPayload
     if (!sub || !jti) return null;
 
     await ensureAuthSchema();
-    const session = await turso.execute({
+    const session = await database.execute({
       sql: "SELECT user_id, expires_at, revoked_at FROM auth_sessions WHERE id = ? LIMIT 1",
       args: [jti],
     });
@@ -420,7 +420,7 @@ export async function verifySessionToken(token: string): Promise<(SessionPayload
 
 export async function revokeSession(jti: string): Promise<void> {
   await ensureAuthSchema();
-  await turso.execute({
+  await database.execute({
     sql: "UPDATE auth_sessions SET revoked_at = ? WHERE id = ?",
     args: [new Date().toISOString(), jti],
   });

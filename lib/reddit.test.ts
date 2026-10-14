@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 test("ranks tracked stock mentions by post and buy or sell keyword", async () => {
-  process.env.TURSO_DATABASE_URL = "file::memory:";
-  process.env.TURSO_AUTH_TOKEN = "test-token";
+  process.env.DATABASE_URL = "file::memory:";
+  process.env.DATABASE_AUTH_TOKEN = "test-token";
 
   const { getRedditStockMentionLists } = await import("./reddit.ts");
-  const { ensureStockSchema, turso } = await import("./turso.ts");
+  const { ensureStockSchema, database } = await import("./database.ts");
 
   try {
     await ensureStockSchema();
-    await turso.executeMultiple(`
+    await database.executeMultiple(`
       INSERT INTO tracked_symbols (symbol, display_name, is_active, created_at, updated_at)
       VALUES
         ('GME', 'GameStop', 1, '2026-09-30T00:00:00.000Z', '2026-09-30T00:00:00.000Z'),
@@ -95,6 +95,6 @@ test("ranks tracked stock mentions by post and buy or sell keyword", async () =>
       },
     ]);
   } finally {
-    turso.close();
+    database.close();
   }
 });

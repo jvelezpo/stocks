@@ -5,17 +5,17 @@ import { NextRequest } from "next/server.js";
 
 test("allows only admins to refresh sentiment and avoids duplicate runs", async () => {
   const databasePath = `/private/tmp/reddit-sentiment-route-test-${process.pid}-${Date.now()}.db`;
-  const previousDatabaseUrl = process.env.TURSO_DATABASE_URL;
-  const previousDatabaseToken = process.env.TURSO_AUTH_TOKEN;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const previousDatabaseToken = process.env.DATABASE_AUTH_TOKEN;
   const previousAuthSecret = process.env.AUTH_SECRET;
   const previousAdminEmails = process.env.ADMIN_EMAILS;
-  process.env.TURSO_DATABASE_URL = `file:${databasePath}`;
-  process.env.TURSO_AUTH_TOKEN = "test-token";
+  process.env.DATABASE_URL = `file:${databasePath}`;
+  process.env.DATABASE_AUTH_TOKEN = "test-token";
   process.env.AUTH_SECRET = "test-auth-secret-at-least-32-characters";
   process.env.ADMIN_EMAILS = "admin@example.com";
   const { POST } = await import("../app/api/admin/reddit-sentiment/route.ts");
   const { createSessionToken, findOrCreateUser, SESSION_COOKIE_NAME } = await import("./auth.ts");
-  const { turso } = await import("./turso.ts");
+  const { database } = await import("./database.ts");
   const globals = globalThis as Record<string, unknown>;
   const previousState = globals.__redditSentimentScheduler;
 
@@ -78,17 +78,17 @@ test("allows only admins to refresh sentiment and avoids duplicate runs", async 
     } else {
       process.env.ADMIN_EMAILS = previousAdminEmails;
     }
-    turso.close();
+    database.close();
     await unlink(databasePath).catch(() => {});
     if (previousDatabaseUrl === undefined) {
-      delete process.env.TURSO_DATABASE_URL;
+      delete process.env.DATABASE_URL;
     } else {
-      process.env.TURSO_DATABASE_URL = previousDatabaseUrl;
+      process.env.DATABASE_URL = previousDatabaseUrl;
     }
     if (previousDatabaseToken === undefined) {
-      delete process.env.TURSO_AUTH_TOKEN;
+      delete process.env.DATABASE_AUTH_TOKEN;
     } else {
-      process.env.TURSO_AUTH_TOKEN = previousDatabaseToken;
+      process.env.DATABASE_AUTH_TOKEN = previousDatabaseToken;
     }
   }
 });

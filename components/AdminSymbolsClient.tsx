@@ -24,6 +24,7 @@ export function AdminSymbolsClient() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<number | string | null>(null);
+  const [runningId, setRunningId] = useState<number | null>(null);
 
   const [newSymbol, setNewSymbol] = useState("");
   const [newDisplayName, setNewDisplayName] = useState("");
@@ -114,6 +115,26 @@ export function AdminSymbolsClient() {
       setError(err instanceof Error ? err.message : "Could not update symbol.");
     } finally {
       setSavingId(null);
+    }
+  }
+
+  async function handleRun(s: TrackedSymbol) {
+    setRunningId(s.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/admin/symbols/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: s.symbol }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? `Could not run ${s.symbol}.`);
+      setNotice(`Latest data collected for ${s.symbol}.`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : `Could not run ${s.symbol}.`);
+    } finally {
+      setRunningId(null);
     }
   }
 
@@ -238,7 +259,8 @@ export function AdminSymbolsClient() {
                   isActive: s.isActive,
                 };
                 const dirty = isDirty(s);
-                const busy = savingId === s.id;
+                const running = runningId === s.id;
+                const busy = savingId === s.id || running;
                 return (
                   <tr className="hover:bg-zinc-50" key={s.id}>
                     <td className="whitespace-nowrap px-4 py-3">
@@ -278,6 +300,14 @@ export function AdminSymbolsClient() {
                     </td>
                     <td className="whitespace-nowrap px-4 py-3">
                       <div className="flex gap-2">
+                        <button
+                          className="rounded-md border border-emerald-200 px-3 py-1.5 text-sm font-medium text-emerald-800 transition hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50"
+                          disabled={busy || runningId !== null}
+                          onClick={() => handleRun(s)}
+                          type="button"
+                        >
+                          {running ? "Running…" : "Run now"}
+                        </button>
                         <button
                           className="rounded-md border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-700 transition hover:border-zinc-300 hover:text-zinc-950 disabled:opacity-50"
                           disabled={!dirty || busy}

@@ -3,7 +3,7 @@ import {
   type RedditKeyword,
   type RedditSentimentResult,
 } from "./reddit-core.ts";
-import { ensureStockSchema, turso } from "./turso.ts";
+import { ensureStockSchema, database } from "./database.ts";
 
 const defaultLimit = 25;
 const maximumLimit = 100;
@@ -208,7 +208,7 @@ export async function getRedditSentimentAnalyses(
 
   args.push(boundedLimit(filters.limit));
 
-  const result = await turso.execute({
+  const result = await database.execute({
     sql: `
       SELECT
         id,
@@ -247,7 +247,7 @@ export async function getRedditStockMentionLists(
   }
 
   const [postResult, symbolResult] = await Promise.all([
-    turso.execute({
+    database.execute({
       sql: `
         SELECT title, body_text, source_url, matched_keywords_json
         FROM reddit_posts
@@ -256,7 +256,7 @@ export async function getRedditStockMentionLists(
       `,
       args,
     }),
-    turso.execute(`
+    database.execute(`
       SELECT symbol, display_name
       FROM tracked_symbols
       WHERE is_active = 1

@@ -129,11 +129,127 @@ export async function runOpencodePrompt(
     throw new Error("Opencode CLI prompt was empty.");
   }
 
+  const serverUrl = process.env.OPENCODE_SERVER_URL?.trim();
+  if (serverUrl) {
+    return runPromptOnServer(prompt, {
+      model,
+      serverUrl,
+      timeoutMs,
+    });
+  }
+
   const workDir = await mkdtemp(join(tmpdir(), "opencode-llm-"));
   try {
     return await runCliInDir(prompt, { model, timeoutMs, cliPath, workDir, maxOutputTokens: options.maxOutputTokens });
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function runPromptOnServer(
+  prompt: string,
+  args: { model: string; serverUrl: string; timeoutMs: number }
+): Promise<OpencodeCliResult> {
+  const password = process.env.OPENCODE_SERVER_PASSWORD?.trim();
+  if (!password) {
+    throw new Error("OPENCODE_SERVER_PASSWORD is required when OPENCODE_SERVER_URL is set.");
+  }
+
+  const username = process.env.OPENCODE_SERVER_USERNAME?.trim() || "opencode";
+  const baseUrl = args.serverUrl.replace(/\/+$/, "");
+  const headers = {
+    Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+    "Content-Type": "application/json",
+    "x-opencode-directory": "/tmp",
+  };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), args.timeoutMs);
+  timer.unref?.();
+
+  async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        `OpenCode server returned ${response.status}: ${body.slice(0, 500) || response.statusText}`
+      );
+    }
+    if (!body) return null;
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      throw new Error("OpenCode server returned invalid JSON.");
+    }
+  }
+
+  let sessionId = "";
+  try {
+    const session = await request("/session", {
+      method: "POST",
+      body: JSON.stringify({ title: "Signal Desk analysis" }),
+    });
+    if (!isRecord(session) || typeof session.id !== "string" || !session.id) {
+      throw new Error("OpenCode server did not return a session id.");
+    }
+    sessionId = session.id;
+
+    const separator = args.model.indexOf("/");
+    const response = await request(`/session/${encodeURIComponent(sessionId)}/message`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: {
+          providerID: args.model.slice(0, separator),
+          modelID: args.model.slice(separator + 1),
+        },
+        variant: OPENCODE_VARIANT,
+        parts: [{ type: "text", text: prompt }],
+      }),
+    });
+
+    if (!isRecord(response) || !Array.isArray(response.parts)) {
+      throw new Error("OpenCode server returned an invalid message response.");
+    }
+    const text = response.parts
+      .filter((part): part is Record<string, unknown> => isRecord(part) && part.type === "text")
+      .map((part) => (typeof part.text === "string" ? part.text : ""))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (!text) {
+      throw new Error("OpenCode server did not return text output.");
+    }
+
+    const info = isRecord(response.info) ? response.info : {};
+    const usage = info.tokens ?? {};
+    return {
+      text,
+      sessionId,
+      usageJson: JSON.stringify(usage),
+      rawResponseJson: JSON.stringify({
+        server: baseUrl,
+        model: args.model,
+        variant: OPENCODE_VARIANT,
+        response,
+      }),
+    };
+  } catch (error: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error(`OpenCode server timed out after ${args.timeoutMs}ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (sessionId) {
+      await fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
+        method: "DELETE",
+        headers,
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
+    }
   }
 }
 
@@ -154,12 +270,15 @@ async function runCliInDir(
     "--",
     prompt,
   ];
+  const childEnv = { ...process.env };
+  delete childEnv.OPENCODE_SERVER_PASSWORD;
+  delete childEnv.OPENCODE_SERVER_USERNAME;
 
   return new Promise<OpencodeCliResult>((resolve, reject) => {
     const child = spawn(args.cliPath, cliArgs, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        ...process.env,
+        ...childEnv,
         ...(args.maxOutputTokens && args.maxOutputTokens > 0
           ? { OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: String(args.maxOutputTokens) }
           : {}),

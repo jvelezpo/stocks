@@ -1,4 +1,4 @@
-import { ensureStockSchema, turso } from "./turso.ts";
+import { ensureStockSchema, database } from "./database.ts";
 
 export type TrackedSymbol = {
   id: number;
@@ -81,10 +81,10 @@ function mapRow(row: TrackedSymbolRow): TrackedSymbol {
 export async function listTrackedSymbols(activeOnly = false): Promise<TrackedSymbol[]> {
   await ensureStockSchema();
   const result = activeOnly
-    ? await turso.execute(
+    ? await database.execute(
         "SELECT id, symbol, display_name, is_active, created_at, updated_at FROM tracked_symbols WHERE is_active = 1 ORDER BY symbol ASC"
       )
-    : await turso.execute(
+    : await database.execute(
         "SELECT id, symbol, display_name, is_active, created_at, updated_at FROM tracked_symbols ORDER BY symbol ASC"
       );
   return (result.rows as unknown as TrackedSymbolRow[]).map(mapRow);
@@ -97,7 +97,7 @@ export async function listActiveSymbols(): Promise<string[]> {
 
 export async function countTrackedSymbols(): Promise<number> {
   await ensureStockSchema();
-  const result = await turso.execute("SELECT COUNT(*) AS count FROM tracked_symbols");
+  const result = await database.execute("SELECT COUNT(*) AS count FROM tracked_symbols");
   return Number(result.rows[0]?.count ?? 0);
 }
 
@@ -113,7 +113,7 @@ export async function createTrackedSymbol(input: {
 
   await ensureStockSchema();
   try {
-    await turso.execute({
+    await database.execute({
       sql: "INSERT INTO tracked_symbols (symbol, display_name, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
       args: [symbol, displayName, isActive ? 1 : 0, now, now],
     });
@@ -125,7 +125,7 @@ export async function createTrackedSymbol(input: {
     throw error;
   }
 
-  const created = await turso.execute({
+  const created = await database.execute({
     sql: "SELECT id, symbol, display_name, is_active, created_at, updated_at FROM tracked_symbols WHERE symbol = ? LIMIT 1",
     args: [symbol],
   });
@@ -143,7 +143,7 @@ export async function updateTrackedSymbol(
   }
 
   await ensureStockSchema();
-  const existing = await turso.execute({
+  const existing = await database.execute({
     sql: "SELECT id, symbol, display_name, is_active, created_at, updated_at FROM tracked_symbols WHERE id = ? LIMIT 1",
     args: [numericId],
   });
@@ -161,7 +161,7 @@ export async function updateTrackedSymbol(
   const now = new Date().toISOString();
 
   try {
-    await turso.execute({
+    await database.execute({
       sql: "UPDATE tracked_symbols SET symbol = ?, display_name = ?, is_active = ?, updated_at = ? WHERE id = ?",
       args: [nextSymbol, nextDisplayName, nextActive ? 1 : 0, now, numericId],
     });
@@ -188,7 +188,7 @@ export async function deleteTrackedSymbol(id: unknown): Promise<void> {
     throw new Error("Valid symbol id is required.");
   }
   await ensureStockSchema();
-  const result = await turso.execute({
+  const result = await database.execute({
     sql: "DELETE FROM tracked_symbols WHERE id = ?",
     args: [numericId],
   });
@@ -212,7 +212,7 @@ export async function seedTrackedSymbolsFromEnv(): Promise<number> {
   let seeded = 0;
   for (const symbol of envSymbols) {
     try {
-      await turso.execute({
+      await database.execute({
         sql: "INSERT INTO tracked_symbols (symbol, display_name, is_active, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
         args: [symbol, "", now, now],
       });

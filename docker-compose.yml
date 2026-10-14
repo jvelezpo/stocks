@@ -3,10 +3,25 @@
 #
 # Requires a `.env` file next to this compose file (see `.env.example`).
 # Puppeteer needs shared memory in Docker, hence `shm_size`.
+#
+# Database: local libSQL (sqld) service, persisted in `./data`
+# (bind mount next to this file).
 services:
+  db:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    container_name: stocks-db
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:5001:5001"
+    volumes:
+      - ./data:/var/lib/sqld
+    restart: unless-stopped
+
   app:
     build: .
     image: stocks:latest
+    # Puppeteer's chrome-headless-shell is downloaded as linux/amd64.
+    platform: linux/amd64
     container_name: stocks
     ports:
       - "5000:5000"
@@ -14,9 +29,15 @@ services:
       - .env
     environment:
       PORT: "5000"
-      # LLM analysis runs through the local `opencode` CLI, which is not
-      # bundled in the image. Quote/Reddit collection still runs without it,
-      # but uncomment to silence the CLI-missing errors:
+      # Inside compose the app reaches the db via the service name.
+      # This overrides DATABASE_URL from `env_file: .env` (which uses
+      # http://localhost:8080 for host-side `npm run dev`).
+      DATABASE_URL: "http://db:8080"
+      # OpenCode runs on the host; the app connects through Docker Desktop.
+      OPENCODE_SERVER_URL: "http://host.docker.internal:4096"
+      # Uncomment to disable LLM analysis:
       # OPENCODE_DISABLED: "true"
+    depends_on:
+      - db
     restart: unless-stopped
     shm_size: 1gb
