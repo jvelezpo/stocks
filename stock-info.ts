@@ -3,8 +3,8 @@ import type { Client, ResultSet } from "@libsql/client";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { ensureStockSchema, turso } from "./lib/turso.ts";
-import { getCollectorSymbols } from "./lib/symbols.ts";
+import { ensureStockSchema, database } from "./lib/database.ts";
+import { getCollectorSymbols, normalizeSymbol } from "./lib/symbols.ts";
 import {
   DEFAULT_LLM_MAX_OUTPUT_TOKENS,
   DEFAULT_OPENCODE_MODEL,
@@ -52,6 +52,12 @@ const promptPath = "./prompts/prompt.md";
 const hftPromptPath = "./prompts/hft.md";
 const llmAnalysisCooldownMs = 5 * 60 * 60 * 1000; // 5 hours
 const hftAnalysisCooldownMs = 20 * 60 * 1000; // 20 minutes
+
+function requestedSymbolFromArgs(): string | undefined {
+  const index = process.argv.indexOf("--symbol");
+
+  return index === -1 ? undefined : normalizeSymbol(process.argv[index + 1]);
+}
 
 type RowId = number | bigint;
 
@@ -392,12 +398,12 @@ function parseHftResult(analysisText: string): HftParsedResult {
 async function connectDatabase(): Promise<Client> {
   await ensureStockSchema();
 
-  return turso;
+  return database;
 }
 
 function lastInsertRowId(result: ResultSet, tableName: string): bigint {
   if (result.lastInsertRowid === undefined) {
-    throw new Error(`Turso did not return a row id for ${tableName}.`);
+    throw new Error(`Database did not return a row id for ${tableName}.`);
   }
 
   return result.lastInsertRowid;
@@ -1168,13 +1174,16 @@ async function main(): Promise<void> {
     const llmConfig = getLlmConfig();
     const documentMaxChars = parsePositiveIntegerEnv("LLM_DOCUMENT_MAX_CHARS", 50000);
 
-    log("Connecting to Turso database");
+    log("Connecting to database");
     db = await connectDatabase();
-    log("Turso database ready");
+    log("Database ready");
 
     // Symbols are now the DB table `tracked_symbols` (managed at /admin/symbols).
     // On first run an empty table is seeded once from the legacy SYMBOLS env var.
-    const symbols = await getCollectorSymbols();
+    const requestedSymbol = requestedSymbolFromArgs();
+    const symbols = requestedSymbol
+      ? [requestedSymbol]
+      : await getCollectorSymbols();
 
     log(`Loaded tracked symbols from DB: ${symbols.join(",") || "(none)"}`);
     log(
@@ -1183,8 +1192,8 @@ async function main(): Promise<void> {
     );
     log(
       llmConfig
-        ? `LLM enabled via Opencode CLI: provider=${llmConfig.provider}, model=${llmConfig.model}`
-        : "Opencode CLI is disabled; LLM analysis will be skipped"
+        ? `LLM enabled via OpenCode: provider=${llmConfig.provider}, model=${llmConfig.model}`
+        : "OpenCode is disabled; LLM analysis will be skipped"
     );
 
     if (symbols.length === 0) {
@@ -1236,9 +1245,9 @@ async function main(): Promise<void> {
     }
   } finally {
     if (db) {
-      log("Closing Turso database");
+      log("Closing database");
       db.close();
-      log("Turso database closed");
+      log("Database closed");
     }
 
     if (browser) {

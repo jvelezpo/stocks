@@ -14,7 +14,7 @@ import {
   resolveOpencodeCliPath,
   runOpencodePrompt,
 } from "./lib/opencode-cli.ts";
-import { ensureStockSchema, turso } from "./lib/turso.ts";
+import { ensureStockSchema, database } from "./lib/database.ts";
 
 type RedditConfig = {
   timeoutMs: number;
@@ -1021,14 +1021,14 @@ async function main(): Promise<void> {
   if (redditConfig) {
     try {
       const { posts, newestBoundary } = await collectNewWallStreetBetsPosts(
-        turso,
+        database,
         redditConfig
       );
       const matchingPosts = posts.filter(
         (post) => post.matchedKeywords.length > 0
       );
-      const newPostCount = await storeNewPosts(turso, matchingPosts);
-      await storeRedditPollBoundary(turso, newestBoundary);
+      const newPostCount = await storeNewPosts(database, matchingPosts);
+      await storeRedditPollBoundary(database, newestBoundary);
 
       log(
         `Validated ${posts.length} new posts; ${matchingPosts.length} matched keywords; ${newPostCount} were stored.`
@@ -1040,7 +1040,7 @@ async function main(): Promise<void> {
 
   if (llmConfig) {
     try {
-      await analyzePendingPosts(turso, llmConfig);
+      await analyzePendingPosts(database, llmConfig);
     } catch (error: unknown) {
       errors.push(error instanceof Error ? error.message : String(error));
     }

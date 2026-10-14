@@ -4,11 +4,11 @@ import test from "node:test";
 
 test("treats Reddit and Polymarket as optional sources and returns only the latest five", async () => {
   const databasePath = `/private/tmp/stock-reddit-analysis-test-${process.pid}-${Date.now()}.db`;
-  process.env.TURSO_DATABASE_URL = `file:${databasePath}`;
-  process.env.TURSO_AUTH_TOKEN = "test-token";
+  process.env.DATABASE_URL = `file:${databasePath}`;
+  process.env.DATABASE_AUTH_TOKEN = "test-token";
   process.env.OPENCODE_MODEL = "muse-spark-1.3-contributor-free";
 
-  const { ensureStockSchema, turso } = await import("./turso.ts");
+  const { ensureStockSchema, database } = await import("./database.ts");
   const {
     getPolymarketStockMarketGroups,
     getStoredPolymarketStockMarketGroups,
@@ -69,7 +69,7 @@ test("treats Reddit and Polymarket as optional sources and returns only the late
 
   try {
     await ensureStockSchema();
-    await turso.execute({
+    await database.execute({
       sql: `
         INSERT INTO stock_history (
           fetched_at,
@@ -179,7 +179,7 @@ test("treats Reddit and Polymarket as optional sources and returns only the late
     delete globals.__stockPolymarketEventsMock;
     delete globals.__opencodeCliMock;
     delete globals.__stockRedditAnalysisRuns;
-    turso.close();
+    database.close();
     await unlink(databasePath).catch(() => {});
   }
 });

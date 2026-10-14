@@ -15,14 +15,13 @@
     "reddit:sentiment": "node --env-file=.env reddit-sentiment.ts",
     "stock:info": "node --env-file=.env stock-info.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test lib/opencode-cli.test.ts lib/reddit-core.test.ts lib/reddit.test.ts lib/reddit-sentiment-scheduler.test.ts lib/stock-chat.test.ts lib/stock-reddit-analysis.test.ts lib/turso.test.ts"
+    "test": "node --test lib/opencode-cli.test.ts lib/reddit-core.test.ts lib/reddit.test.ts lib/reddit-sentiment-scheduler.test.ts lib/stock-chat.test.ts lib/stock-reddit-analysis.test.ts lib/database.test.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@libsql/client": "^0.17.3",
-    "@tursodatabase/serverless": "^1.2.0",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.27",

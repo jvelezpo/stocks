@@ -7,7 +7,7 @@ import type {
 } from "@libsql/client";
 import type { NextRequest } from "next/server";
 import { getStockDetail, type StockDetail } from "./stocks.ts";
-import { ensureStockSchema, turso } from "./turso.ts";
+import { ensureStockSchema, database } from "./database.ts";
 import {
   DEFAULT_LLM_MAX_OUTPUT_TOKENS,
   DEFAULT_OPENCODE_MODEL,
@@ -268,7 +268,7 @@ export function getChatNetworkHash(request: NextRequest): string | null {
     forwardedAddress || request.headers.get("x-real-ip")?.trim() || "unknown";
   const secret =
     optionalEnv("STOCK_CHAT_RATE_LIMIT_SALT") ||
-    optionalEnv("TURSO_AUTH_TOKEN") ||
+    optionalEnv("DATABASE_AUTH_TOKEN") ||
     "stock-chat-local-rate-limit";
 
   return createHmac("sha256", secret)
@@ -554,7 +554,7 @@ async function rows<T>(
 async function writeTransaction<T>(
   work: (transaction: Transaction) => Promise<T>
 ): Promise<T> {
-  const transaction = await turso.transaction("write");
+  const transaction = await database.transaction("write");
 
   try {
     const value = await work(transaction);
@@ -733,7 +733,7 @@ async function assertStockExists(symbol: string): Promise<StockDetail> {
 async function assertStockViewExists(symbol: string): Promise<void> {
   await ensureStockSchema();
   const result = await rows<CountRow>(
-    turso,
+    database,
     `
       SELECT COUNT(*) AS count
       FROM stock_history
@@ -755,7 +755,7 @@ export async function listChatSessions(
   const symbol = normalizeSymbol(rawSymbol);
   await ensureStockSchema();
   const result = await rows<ChatSessionRow>(
-    turso,
+    database,
     `
       ${sessionSummarySql}
       WHERE session.visitor_hash = ?
@@ -1000,8 +1000,8 @@ export async function getChatSession(
   });
 
   const [session, messages] = await Promise.all([
-    requireOwnedSession(turso, visitorHash, symbol, sessionId),
-    sessionMessages(turso, sessionId),
+    requireOwnedSession(database, visitorHash, symbol, sessionId),
+    sessionMessages(database, sessionId),
   ]);
 
   return {
@@ -1240,7 +1240,7 @@ async function modelHistory(
   beforeMessageId: number
 ): Promise<{ role: ChatMessageRole; content: string }[]> {
   const result = await rows<ConversationRow>(
-    turso,
+    database,
     `
       SELECT role, content
       FROM stock_chat_messages
@@ -1493,7 +1493,7 @@ async function completeTurn(
     return mapMessage(inserted[0]);
   });
   const session = await requireOwnedSession(
-    turso,
+    database,
     visitorHash,
     symbol,
     sessionId
@@ -1571,7 +1571,7 @@ async function failTurn(
     return failedMessages.assistant;
   });
   const session = await requireOwnedSession(
-    turso,
+    database,
     visitorHash,
     symbol,
     sessionId
@@ -1604,7 +1604,7 @@ export async function sendChatMessage(
 
   if (claim.kind === "existing") {
     const session = await requireOwnedSession(
-      turso,
+      database,
       visitorHash,
       symbol,
       sessionId

@@ -4,8 +4,8 @@ import test from "node:test";
 
 test("persists isolated chat history and locks concurrent AI turns", async () => {
   const databasePath = `/private/tmp/stock-chat-test-${process.pid}-${Date.now()}.db`;
-  process.env.TURSO_DATABASE_URL = `file:${databasePath}`;
-  process.env.TURSO_AUTH_TOKEN = "test-token";
+  process.env.DATABASE_URL = `file:${databasePath}`;
+  process.env.DATABASE_AUTH_TOKEN = "test-token";
   // The chat now runs through the local OpenCode CLI, so no API key is needed.
   delete process.env.OPENCODE_API_KEY;
   process.env.OPENCODE_MODEL = "muse-spark-1.3-contributor-free";
@@ -14,7 +14,7 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
   delete process.env.LLM_MAX_OUTPUT_TOKENS;
   process.env.LLM_TIMEOUT_MS = "5000";
 
-  const { ensureStockSchema, turso } = await import("./turso.ts");
+  const { ensureStockSchema, database } = await import("./database.ts");
   const {
     StockChatError,
     createChatSession,
@@ -30,7 +30,7 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
 
   try {
     await ensureStockSchema();
-    await turso.execute({
+    await database.execute({
       sql: `
         INSERT INTO stock_history (
           fetched_at,
@@ -258,7 +258,7 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
     );
   } finally {
     delete (globalThis as Record<string, unknown>).__opencodeCliMock;
-    turso.close();
+    database.close();
     await unlink(databasePath).catch(() => {});
   }
 });

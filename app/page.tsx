@@ -151,7 +151,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               {latestFetch ? `Latest capture ${formatDateTime(latestFetch)}` : "No captures yet"}
             </span>
             <span className="hidden h-1 w-1 rounded-full bg-zinc-500 sm:inline-block" />
-            <span>Live data from Turso</span>
+            <span>Live data from local database</span>
           </div>
         </div>
       </PageHeader>
@@ -162,7 +162,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             <LineChart className="mx-auto h-10 w-10 text-zinc-400" />
             <h2 className="mt-4 text-2xl font-semibold text-zinc-900">No symbols stored yet</h2>
             <p className="mx-auto mt-2 max-w-xl text-zinc-600">
-              Quote history, documents, and analyses will appear here when rows exist in Turso.
+              Quote history, documents, and analyses will appear here when rows exist in the database.
             </p>
           </div>
         ) : (

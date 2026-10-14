@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 test("migrates earlier Reddit tables to the durable queue schema", async () => {
-  process.env.TURSO_DATABASE_URL = "file::memory:";
-  process.env.TURSO_AUTH_TOKEN = "test-token";
+  process.env.DATABASE_URL = "file::memory:";
+  process.env.DATABASE_AUTH_TOKEN = "test-token";
 
-  const { ensureStockSchema, turso } = await import("./turso.ts");
+  const { ensureStockSchema, database } = await import("./database.ts");
 
   try {
-    await turso.executeMultiple(`
+    await database.executeMultiple(`
       CREATE TABLE reddit_posts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         reddit_post_id TEXT NOT NULL UNIQUE,
@@ -84,14 +84,14 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
 
     await ensureStockSchema();
 
-    const postColumns = await turso.execute("PRAGMA table_info(reddit_posts)");
-    const stateColumns = await turso.execute(
+    const postColumns = await database.execute("PRAGMA table_info(reddit_posts)");
+    const stateColumns = await database.execute(
       "PRAGMA table_info(reddit_monitor_state)"
     );
-    const stockAnalysisColumns = await turso.execute(
+    const stockAnalysisColumns = await database.execute(
       "PRAGMA table_info(stock_reddit_analyses)"
     );
-    const polymarketColumns = await turso.execute(
+    const polymarketColumns = await database.execute(
       "PRAGMA table_info(polymarket_market_snapshots)"
     );
     const postColumnNames = new Set(postColumns.rows.map((row) => row.name));
@@ -99,7 +99,7 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
     const stockAnalysisColumnNames = new Set(
       stockAnalysisColumns.rows.map((row) => row.name)
     );
-    const migratedPost = await turso.execute({
+    const migratedPost = await database.execute({
       sql: `
         SELECT analysis_status, sentiment_analysis_id
         FROM reddit_posts
@@ -118,6 +118,6 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
     assert.equal(migratedPost.rows[0]?.analysis_status, "completed");
     assert.equal(Number(migratedPost.rows[0]?.sentiment_analysis_id), 1);
   } finally {
-    turso.close();
+    database.close();
   }
 });

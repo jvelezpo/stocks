@@ -1,33 +1,46 @@
 import { createClient, type Client } from "@libsql/client";
 
-function requiredEnv(name: string): string {
+function optionalEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
 
+  return value ? value : undefined;
+}
+
+function databaseUrl(): string {
+  const value = optionalEnv("DATABASE_URL");
+
   if (!value) {
-    throw new Error(`Missing required env var ${name}.`);
+    throw new Error("Missing required env var DATABASE_URL.");
   }
 
   return value;
 }
 
+function databaseAuthToken(): string | undefined {
+  // Local sqld in docker-compose runs without auth, so the token is optional.
+  return optionalEnv("DATABASE_AUTH_TOKEN");
+}
+
 // Lazily create the client on first use instead of at import time.
 // `next build` imports every route module to collect page data, but the
 // builder stage has no `.env` (excluded via .dockerignore) and compose
-// `env_file` only applies at runtime. Eagerly calling requiredEnv() here
+// `env_file` only applies at runtime. Eagerly reading env here
 // made the Docker build fail with "Missing required env var
-// TURSO_DATABASE_URL" even for routes marked `dynamic = "force-dynamic"`.
+// DATABASE_URL" even for routes marked `dynamic = "force-dynamic"`.
+// URL defaults to the local sqld service in docker-compose
+// (http://db:8080, persisted in ./data next to the Dockerfile).
 let cachedClient: Client | null = null;
 
 function getClient(): Client {
   cachedClient ??= createClient({
-    url: requiredEnv("TURSO_DATABASE_URL"),
-    authToken: requiredEnv("TURSO_AUTH_TOKEN"),
+    url: databaseUrl(),
+    authToken: databaseAuthToken(),
   });
 
   return cachedClient;
 }
 
-export const turso: Client = new Proxy({} as Client, {
+export const database: Client = new Proxy({} as Client, {
   get(_target, prop, _receiver) {
     // Avoid turning the client into a thenable during module inspection.
     if (prop === "then") {
@@ -48,7 +61,7 @@ type ColumnDefinition = {
 };
 
 async function tableColumnNames(table: string): Promise<Set<string>> {
-  const result = await turso.execute(`PRAGMA table_info(${table})`);
+  const result = await database.execute(`PRAGMA table_info(${table})`);
 
   return new Set(
     result.rows.flatMap((row) =>
@@ -69,7 +82,7 @@ async function addMissingColumns(
     }
 
     try {
-      await turso.execute(`ALTER TABLE ${table} ADD COLUMN ${column.sql}`);
+      await database.execute(`ALTER TABLE ${table} ADD COLUMN ${column.sql}`);
       existingColumns.add(column.name);
     } catch (error: unknown) {
       const currentColumns = await tableColumnNames(table);
@@ -114,7 +127,7 @@ async function ensureRedditSchemaMigrations(): Promise<void> {
       sql: "last_seen_posted_at TEXT NOT NULL DEFAULT ''",
     },
   ]);
-  await turso.execute(`
+  await database.execute(`
     UPDATE reddit_posts
     SET
       analysis_status = 'completed',
@@ -148,14 +161,14 @@ async function ensureRedditSchemaMigrations(): Promise<void> {
           AND CAST(analyzed_post.value AS TEXT) = reddit_posts.reddit_post_id
       )
   `);
-  await turso.execute(`
+  await database.execute(`
     CREATE INDEX IF NOT EXISTS idx_reddit_posts_analysis_queue
       ON reddit_posts (analysis_status, analysis_started_at, id)
   `);
 }
 
 export function ensureStockSchema(): Promise<void> {
-  schemaPromise ??= turso
+  schemaPromise ??= database
     .executeMultiple(`
       CREATE TABLE IF NOT EXISTS stock_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

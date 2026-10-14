@@ -100,6 +100,11 @@ dist
 # Sveltekit cache directory
 .svelte-kit/
 
+# Local libSQL (sqld) data volume, bind-mounted in docker-compose.yml.
+# Lives next to the Dockerfile and is never committed.
+/data/
+data/
+
 # vitepress build output
 **/.vitepress/dist
 

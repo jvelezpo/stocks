@@ -6,7 +6,7 @@ import {
   resolveOpencodeCliPath,
   runOpencodePrompt,
 } from "./opencode-cli.ts";
-import { ensureStockSchema, turso } from "./turso.ts";
+import { ensureStockSchema, database } from "./database.ts";
 
 const symbolPattern = /^[A-Z0-9^][A-Z0-9.^=-]{0,19}$/;
 const redditPostLimit = 25;
@@ -473,7 +473,7 @@ export async function refreshPolymarketMarketSnapshots(
   }
 
   if (statements.length > 0) {
-    await turso.batch(statements, "write");
+    await database.batch(statements, "write");
   }
 
   return { refreshedSymbols: successful.length, storedMarkets };
@@ -490,7 +490,7 @@ export async function getStoredPolymarketStockMarketGroups(
   const boundedLimit = Math.min(Math.max(Math.trunc(marketsPerStock), 1), 10);
   const allowedSymbols = new Set(stocks.map((stock) => stock.symbol.trim().toUpperCase()));
   await ensureStockSchema();
-  const result = await turso.execute(`
+  const result = await database.execute(`
     SELECT
       symbol,
       stock_name,
@@ -620,7 +620,7 @@ export async function runStockRedditAnalysis(
   activeRuns.add(symbol);
   try {
     await ensureStockSchema();
-    const stock = await turso.execute({
+    const stock = await database.execute({
       sql: `
         SELECT name
         FROM stock_history
@@ -669,7 +669,7 @@ export async function runStockRedditAnalysis(
       }
     );
     const createdAt = new Date().toISOString();
-    const inserted = await turso.execute({
+    const inserted = await database.execute({
       sql: `
         INSERT INTO stock_reddit_analyses (
           created_at,
@@ -699,7 +699,7 @@ export async function getStockRedditAnalyses(
   const symbol = normalizeSymbol(rawSymbol);
   const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 5);
   await ensureStockSchema();
-  const result = await turso.execute({
+  const result = await database.execute({
     sql: `
       SELECT id, created_at, symbol, instruction_text, post_count, market_count, model, analysis_text
       FROM stock_reddit_analyses
