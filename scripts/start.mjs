@@ -1,12 +1,21 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
+const port = process.env.PORT?.trim() || "5000";
+// In Docker the environment comes from the container (compose env_file),
+// not from a .env file, so only pass --env-file when it exists.
+const workerEnvFileArgs = existsSync(".env") ? ["--env-file=.env"] : [];
 const processes = [
-  spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--port", "5000"], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: "inherit",
-  }),
-  spawn(process.execPath, ["--env-file=.env", "workers.ts"], {
+  spawn(
+    process.execPath,
+    ["node_modules/next/dist/bin/next", "start", "--port", port, "--hostname", "0.0.0.0"],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "inherit",
+    }
+  ),
+  spawn(process.execPath, [...workerEnvFileArgs, "workers.ts"], {
     cwd: process.cwd(),
     env: process.env,
     stdio: "inherit",
