@@ -33,11 +33,27 @@ services:
       # This overrides DATABASE_URL from `env_file: .env` (which uses
       # http://localhost:8080 for host-side `npm run dev`).
       DATABASE_URL: "http://db:8080"
-      # OpenCode runs on the host; the app connects through Docker Desktop.
-      OPENCODE_SERVER_URL: "http://host.docker.internal:4096"
+      # OpenCode runs as a service on the compose network.
+      OPENCODE_SERVER_URL: "http://opencode:4096"
       # Uncomment to disable LLM analysis:
       # OPENCODE_DISABLED: "true"
     depends_on:
       - db
+      - opencode
     restart: unless-stopped
     shm_size: 1gb
+
+  opencode:
+    image: ghcr.io/anomalyco/opencode:1.19.0
+    container_name: stocks-opencode
+    environment:
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Set OPENCODE_SERVER_PASSWORD in .env}
+      OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: "600"
+    command: ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
+    working_dir: /tmp
+    volumes:
+      - opencode-data:/root/.local/share/opencode
+    restart: unless-stopped
+
+volumes:
+  opencode-data:

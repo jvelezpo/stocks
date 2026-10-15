@@ -67,7 +67,7 @@ DATABASE_URL=http://localhost:8080
 # DATABASE_AUTH_TOKEN=  # sqld runs without auth by default
 ```
 
-LLM analysis uses the OpenCode server running on the host, so its configured providers and models are available to Docker without installing the host CLI in the container. Set `OPENCODE_DISABLED=true` or `OPENCODE_MODEL=none` to skip AI analysis; quote capture and matching Reddit post collection still run. `OPENCODE_MODEL` defaults to `muse-spark-1.3-contributor-free` (Muse Spark 1.3 Free).
+LLM analysis uses the OpenCode service in Compose. The service runs the official OpenCode image and keeps its authentication in a persistent Docker volume. Set `OPENCODE_DISABLED=true` or `OPENCODE_MODEL=none` to skip AI analysis; quote capture and matching Reddit post collection still run. `OPENCODE_MODEL` defaults to `muse-spark-1.3-contributor-free` (Muse Spark 1.3 Free).
 
 ## Environment Variables
 
@@ -80,9 +80,9 @@ LLM analysis uses the OpenCode server running on the host, so its configured pro
 | `DATABASE_AUTH_TOKEN` | No | Authentication token for the database when configured. Local sqld runs without auth by default. |
 | `OPENCODE_MODEL` | No | OpenCode model id used for all LLM analysis. Defaults to `muse-spark-1.3-contributor-free` (Muse Spark 1.3 Free). Use `provider/model` format or a short id (short ids are prefixed with `opencode/`). |
 | `OPENCODE_CLI_PATH` | No | Path to the OpenCode CLI binary for local development. Defaults to `opencode`. |
-| `OPENCODE_SERVER_URL` | No | OpenCode server URL. Compose sets this to `http://host.docker.internal:4096`; local development can leave it unset to use the CLI. |
-| `OPENCODE_SERVER_USERNAME` | No | Username for the host OpenCode server. Defaults to `opencode`. |
-| `OPENCODE_SERVER_PASSWORD` | In Docker | Password shared with the host OpenCode server. |
+| `OPENCODE_SERVER_URL` | No | OpenCode server URL. Compose sets this to `http://opencode:4096`; local development can leave it unset to use the CLI. |
+| `OPENCODE_SERVER_USERNAME` | No | Username for the OpenCode service. Defaults to `opencode`. |
+| `OPENCODE_SERVER_PASSWORD` | In Docker | Password shared by the app and OpenCode service. |
 | `OPENCODE_DISABLED` | No | Set to `true` (or `OPENCODE_MODEL=none`) to skip LLM analysis. |
 | `LLM_DOCUMENT_MAX_CHARS` | No | Max captured page text sent to analysis. Defaults to `50000`. |
 | `LLM_MAX_OUTPUT_TOKENS` | No | Max AI response tokens. Defaults to `600`. |
@@ -101,16 +101,7 @@ cp .env.example .env  # fill in AUTH_SECRET, ADMIN_EMAILS, RESEND_*, OPENCODE_SE
 docker compose up -d --build
 ```
 
-In another host terminal, load the credentials from `.env` and start OpenCode's HTTP server:
-
-```bash
-set -a
-source .env
-set +a
-OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=600 opencode serve --hostname 0.0.0.0 --port 4096
-```
-
-The Compose app connects to `http://host.docker.internal:4096`. Keep the server password enabled while listening on `0.0.0.0`.
+Compose starts the `opencode` service with the official OpenCode image. Its authentication is stored in a dedicated persistent Docker volume. Authenticate it once with `docker compose exec opencode opencode auth login` and follow the prompts. This container uses its own OpenCode login and does not read your host OpenCode files.
 
 Open `http://localhost:5000`. Other commands:
 
@@ -128,7 +119,7 @@ Notes:
 
 - The image runs `node scripts/start.mjs` (Next.js on `PORT`, default `5000`, plus the workers).
 - Puppeteer runs with `--no-sandbox`; compose sets `shm_size: 1gb` so headless Chrome has enough shared memory.
-- The Docker app requires the host OpenCode server above for LLM analysis. Local development uses `OPENCODE_CLI_PATH` when `OPENCODE_SERVER_URL` is unset.
+- The Docker app connects to the Compose `opencode` service for LLM analysis. Local development uses `OPENCODE_CLI_PATH` when `OPENCODE_SERVER_URL` is unset.
 
 ## Running
 
