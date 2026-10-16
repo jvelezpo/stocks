@@ -23,6 +23,7 @@ ENV DATABASE_URL=$DATABASE_URL \
     AUTH_SECRET=$AUTH_SECRET
 
 COPY package.json package-lock.json ./
+COPY scripts/install-git-hooks.mjs ./scripts/
 RUN npm ci
 
 COPY . .
@@ -82,6 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
+COPY scripts/install-git-hooks.mjs ./scripts/
 # Postinstall downloads the Puppeteer browser into /root/.cache/puppeteer.
 RUN npm ci --omit=dev
 
