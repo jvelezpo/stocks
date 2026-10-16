@@ -15,4 +15,4 @@ if (configured.status !== 0) {
   process.exit(configured.status ?? 1);
 }
 
-console.log("Configured Conventional Commit version hook.");
+console.log("Configured Conventional Commit validation and in-commit version bump hooks.");

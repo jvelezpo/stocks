@@ -1,0 +1,7 @@
+#!/bin/sh
+
+if [ "${STOCKS_VERSION_AMEND:-}" = "1" ]; then
+  exit 0
+fi
+
+node scripts/bump-version.mjs amend-head

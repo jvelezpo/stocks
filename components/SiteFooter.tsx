@@ -36,7 +36,7 @@ export function SiteFooter() {
             <Globe2 className="h-4 w-4" />
             {label}
           </button>
-          <span aria-label={`Version ${packageInfo.version}`}>v{packageInfo.version}</span>
+          <span aria-label={`Version ${packageInfo.version}`}>version {packageInfo.version}</span>
         </div>
       </div>
     </footer>
