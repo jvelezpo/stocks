@@ -1,6 +1,7 @@
 "use client";
 
 import { Languages, Globe2 } from "lucide-react";
+import packageInfo from "../package.json";
 import { useMarketTimeZone } from "./MarketTimeZoneContext";
 
 export function SiteFooter() {
@@ -10,7 +11,9 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-zinc-200 bg-white/80">
       <div className="mx-auto flex max-w-7xl flex-col gap-3 px-5 py-5 text-sm text-zinc-600 sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-10">
-        <span>Signal Desk</span>
+        <span>
+          Signal Desk <span aria-label={`Version ${packageInfo.version}`}>v{packageInfo.version}</span>
+        </span>
         <div className="flex flex-wrap items-center gap-2">
           <label className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700">
             <Languages className="h-4 w-4" />
