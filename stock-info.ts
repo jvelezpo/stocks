@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { ensureStockSchema, database } from "./lib/database.ts";
+import { blockUnneededPageResources } from "./lib/puppeteer-page.ts";
 import { getCollectorSymbols, normalizeSymbol } from "./lib/symbols.ts";
 import {
   DEFAULT_LLM_MAX_OUTPUT_TOKENS,
@@ -38,6 +39,19 @@ type PageDocument = {
   bodyText: string;
   bodyCharCount: number;
   wasTruncated: boolean;
+};
+
+type AnalysisPlan = {
+  runGeneral: boolean;
+  runHft: boolean;
+};
+
+type ScrapedSymbol = {
+  symbol: string;
+  url: string;
+  quote: Quote;
+  pageDocument: PageDocument | null;
+  analysisPlan: AnalysisPlan;
 };
 
 type LlmResult = {
@@ -817,6 +831,77 @@ async function latestHftAnalysisRun(
   return (result.rows[0] as unknown as LatestAnalysisRun | undefined) ?? null;
 }
 
+function analysisIsDue(
+  latest: LatestAnalysisRun | null,
+  cooldownMs: number
+): { due: boolean; ageMs: number } {
+  if (!latest) {
+    return { due: true, ageMs: Number.POSITIVE_INFINITY };
+  }
+
+  const latestTime = Date.parse(latest.created_at);
+  if (!Number.isFinite(latestTime)) {
+    return { due: true, ageMs: Number.POSITIVE_INFINITY };
+  }
+
+  const ageMs = Date.now() - latestTime;
+  return { due: ageMs > cooldownMs, ageMs };
+}
+
+function logCooldownSkip(
+  symbol: string,
+  label: string,
+  latest: LatestAnalysisRun,
+  ageMs: number,
+  cooldownMs: number
+): void {
+  log(
+    `[${symbol}] Skipping ${label}: latest run was ${formatDuration(
+      Math.max(ageMs, 0)
+    )} ago at ${latest.created_at} ` +
+      `(status=${latest.status}, provider=${latest.provider}, model=${latest.model}); ` +
+      `cooldown=${formatDuration(cooldownMs)}.`
+  );
+}
+
+async function getAnalysisPlan(
+  db: Client,
+  symbol: string,
+  llmConfig: LlmConfig | null
+): Promise<AnalysisPlan> {
+  if (!llmConfig) {
+    return { runGeneral: false, runHft: false };
+  }
+
+  const [latestGeneral, latestHft] = await Promise.all([
+    latestAnalysisRun(db, symbol),
+    latestHftAnalysisRun(db, symbol),
+  ]);
+  const general = analysisIsDue(latestGeneral, llmAnalysisCooldownMs);
+  const hft = analysisIsDue(latestHft, hftAnalysisCooldownMs);
+
+  if (!general.due && latestGeneral) {
+    logCooldownSkip(
+      symbol,
+      "LLM analysis",
+      latestGeneral,
+      general.ageMs,
+      llmAnalysisCooldownMs
+    );
+  }
+  if (!hft.due && latestHft) {
+    logCooldownSkip(
+      symbol,
+      "HFT analysis",
+      latestHft,
+      hft.ageMs,
+      hftAnalysisCooldownMs
+    );
+  }
+
+  return { runGeneral: general.due, runHft: hft.due };
+}
+
 async function acceptYahooConsent(page: Page): Promise<boolean> {
   const clicked = await page.evaluate((): boolean => {
     const button = Array.from(
@@ -934,14 +1019,12 @@ async function getQuote(page: Page): Promise<Quote> {
   });
 }
 
-async function processSymbol(
-  db: Client,
+async function scrapeSymbol(
   page: Page,
   symbol: string,
-  llmConfig: LlmConfig | null,
   documentMaxChars: number,
-  macNotificationSymbols: Set<string>
-): Promise<void> {
+  analysisPlan: AnalysisPlan
+): Promise<ScrapedSymbol> {
   const url = quoteUrl(symbol);
 
   const fetchStartTime = performance.now();
@@ -965,43 +1048,49 @@ async function processSymbol(
     throw new Error("Could not find the current price on Yahoo Finance.");
   }
 
+  let pageDocument: PageDocument | null = null;
+  if (analysisPlan.runGeneral || analysisPlan.runHft) {
+    log(`[${symbol}] Capturing website body for analysis, maxChars=${documentMaxChars}`);
+    pageDocument = await getPageDocument(page, documentMaxChars);
+    log(
+      `[${symbol}] Captured website body chars=${pageDocument.bodyCharCount}, ` +
+        `truncated=${pageDocument.wasTruncated}`
+    );
+  } else {
+    log(`[${symbol}] Skipping website body capture: no analysis is due.`);
+  }
+
+  return { symbol, url, quote, pageDocument, analysisPlan };
+}
+
+async function processSymbol(
+  db: Client,
+  scraped: ScrapedSymbol,
+  llmConfig: LlmConfig | null,
+  macNotificationSymbols: Set<string>
+): Promise<void> {
+  const { symbol, url, quote, pageDocument, analysisPlan } = scraped;
+
   log(`[${symbol}] Storing quote history row`);
   const rowId = await storeQuoteHistory(db, symbol, url, quote);
   log(`[${symbol}] Stored quote history row id=${rowId.toString()}`);
 
-  log(`[${symbol}] Capturing website body for analysis, maxChars=${documentMaxChars}`);
-  const pageDocument = await getPageDocument(page, documentMaxChars);
-  log(
-    `[${symbol}] Captured website body chars=${pageDocument.bodyCharCount}, ` +
-      `truncated=${pageDocument.wasTruncated}`
-  );
+  if (analysisPlan.runGeneral || analysisPlan.runHft) {
+    if (!llmConfig || !pageDocument) {
+      throw new Error("Analysis was scheduled without its LLM config or page document.");
+    }
 
-  log(`[${symbol}] Storing website document row`);
-  const documentId = await storePageDocument(db, rowId, symbol, url, pageDocument);
-  log(`[${symbol}] Stored website document row id=${documentId.toString()}`);
+    log(`[${symbol}] Storing website document row for scheduled analysis`);
+    const documentId = await storePageDocument(
+      db,
+      rowId,
+      symbol,
+      url,
+      pageDocument
+    );
+    log(`[${symbol}] Stored website document row id=${documentId.toString()}`);
 
-  if (llmConfig) {
-    const latestAnalysis = await latestAnalysisRun(db, symbol);
-    const latestAnalysisTime = latestAnalysis
-      ? Date.parse(latestAnalysis.created_at)
-      : 0;
-    const latestAnalysisAgeMs = Date.now() - latestAnalysisTime;
-
-    if (
-      latestAnalysis &&
-      Number.isFinite(latestAnalysisTime) &&
-      latestAnalysisAgeMs <= llmAnalysisCooldownMs
-    ) {
-      log(
-        `[${symbol}] Skipping LLM analysis: latest analysis ran ${formatDuration(
-          Math.max(latestAnalysisAgeMs, 0)
-        )} ago at ${latestAnalysis.created_at} ` +
-          `(status=${latestAnalysis.status}, provider=${latestAnalysis.provider}, ` +
-          `model=${latestAnalysis.model}); cooldown=${formatDuration(
-            llmAnalysisCooldownMs
-          )}.`
-      );
-    } else {
+    if (analysisPlan.runGeneral) {
       const promptText = readAnalysisPrompt();
       const analysisInput = buildAnalysisPrompt(promptText, pageDocument.bodyText);
 
@@ -1046,27 +1135,7 @@ async function processSymbol(
       }
     }
 
-    const latestHftAnalysis = await latestHftAnalysisRun(db, symbol);
-    const latestHftAnalysisTime = latestHftAnalysis
-      ? Date.parse(latestHftAnalysis.created_at)
-      : 0;
-    const latestHftAnalysisAgeMs = Date.now() - latestHftAnalysisTime;
-
-    if (
-      latestHftAnalysis &&
-      Number.isFinite(latestHftAnalysisTime) &&
-      latestHftAnalysisAgeMs <= hftAnalysisCooldownMs
-    ) {
-      log(
-        `[${symbol}] Skipping HFT analysis: latest HFT run was ${formatDuration(
-          Math.max(latestHftAnalysisAgeMs, 0)
-        )} ago at ${latestHftAnalysis.created_at} ` +
-          `(status=${latestHftAnalysis.status}, provider=${latestHftAnalysis.provider}, ` +
-          `model=${latestHftAnalysis.model}); cooldown=${formatDuration(
-            hftAnalysisCooldownMs
-          )}.`
-      );
-    } else {
+    if (analysisPlan.runHft) {
       const hftPromptText = readHftPrompt();
       const hftHistoryRows = await recentStockHistoryRows(db, symbol);
       const hftInput = buildHftPrompt(
@@ -1125,6 +1194,8 @@ async function processSymbol(
         log(`[${symbol}] Stored failed HFT analysis row id=${hftAnalysisId.toString()}`);
       }
     }
+  } else {
+    log(`[${symbol}] Skipping website document storage: no analysis is due.`);
   }
 
   const change = [quote.change, quote.changePercent].filter(Boolean).join(" ");
@@ -1201,6 +1272,14 @@ async function main(): Promise<void> {
       return;
     }
 
+    const analysisPlans = new Map<string, AnalysisPlan>();
+    for (const symbol of symbols) {
+      analysisPlans.set(symbol, await getAnalysisPlan(db, symbol, llmConfig));
+    }
+
+    const failures: string[] = [];
+    const scrapedSymbols: ScrapedSymbol[] = [];
+
     log("Launching browser");
     browser = await puppeteer.launch({
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
@@ -1209,34 +1288,57 @@ async function main(): Promise<void> {
     });
     log("Browser launched");
 
-    const page = await browser.newPage();
+    try {
+      const page = await browser.newPage();
 
-    await page.setViewport({ width: 1280, height: 900 });
-    await page.setUserAgent(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    );
+      await blockUnneededPageResources(page);
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.setUserAgent(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      );
 
-    const failures: string[] = [];
+      for (const [index, symbol] of symbols.entries()) {
+        const symbolStartTime = performance.now();
+        log(`[${symbol}] Scrape start (${index + 1}/${symbols.length})`);
 
-    for (const [index, symbol] of symbols.entries()) {
+        try {
+          const analysisPlan = analysisPlans.get(symbol) ?? {
+            runGeneral: false,
+            runHft: false,
+          };
+          scrapedSymbols.push(
+            await scrapeSymbol(page, symbol, documentMaxChars, analysisPlan)
+          );
+          log(`[${symbol}] Scrape end. Total time: ${elapsedSince(symbolStartTime)}`);
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          failures.push(`${symbol}: ${message}`);
+          log(`[${symbol}] Scrape failed: ${message}`);
+        }
+      }
+    } finally {
+      const browserToClose = browser;
+      log("Closing browser before database and LLM processing");
+      await browserToClose.close();
+      browser = undefined;
+      log("Browser closed");
+    }
+
+    for (const scraped of scrapedSymbols) {
       const symbolStartTime = performance.now();
-      log(`[${symbol}] Start (${index + 1}/${symbols.length})`);
-
+      log(`[${scraped.symbol}] Processing start`);
       try {
-        await processSymbol(
-          db,
-          page,
-          symbol,
-          llmConfig,
-          documentMaxChars,
-          macNotificationSymbols
+        await processSymbol(db, scraped, llmConfig, macNotificationSymbols);
+        log(
+          `[${scraped.symbol}] Processing end. Total time: ${elapsedSince(
+            symbolStartTime
+          )}`
         );
-        log(`[${symbol}] End. Total time: ${elapsedSince(symbolStartTime)}`);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        failures.push(`${symbol}: ${message}`);
-        log(`[${symbol}] Failed: ${message}`);
+        failures.push(`${scraped.symbol}: ${message}`);
+        log(`[${scraped.symbol}] Processing failed: ${message}`);
       }
     }
 

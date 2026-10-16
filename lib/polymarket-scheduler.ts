@@ -1,7 +1,8 @@
 import { getStockSummaries } from "./stocks.ts";
 import { refreshPolymarketMarketSnapshots } from "./stock-reddit-analysis.ts";
+import { collectorIntervalMs } from "./collector-scheduler.ts";
 
-const refreshIntervalMs = 300_000;
+const refreshIntervalMs = collectorIntervalMs("POLYMARKET_INTERVAL_MS", 900_000);
 
 type SchedulerState = {
   interval: NodeJS.Timeout | null;
@@ -57,7 +58,7 @@ export function startPolymarketScheduler(): SchedulerState {
     void refresh(state);
   }, refreshIntervalMs);
   state.interval.unref();
-  log("Started Polymarket scheduler; interval=300s.");
+  log(`Started Polymarket scheduler; interval=${refreshIntervalMs / 1000}s.`);
   void refresh(state);
   return state;
 }

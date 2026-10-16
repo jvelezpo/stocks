@@ -5,14 +5,23 @@ import {
   getMarketSession,
   millisecondsUntil,
 } from "./market-hours.ts";
+import {
+  collectorIntervalMs,
+  enqueueCollectorTask,
+  type QueuedCollectorTask,
+} from "./collector-scheduler.ts";
 
-const stockInfoIntervalMs = 60_000;
+const stockInfoIntervalMs = collectorIntervalMs(
+  "STOCK_INFO_INTERVAL_MS",
+  300_000
+);
 const runWhenMarketClosedEnv = "STOCK_INFO_RUN_WHEN_MARKET_CLOSED";
 
 type SchedulerState = {
   interval: NodeJS.Timeout | null;
   marketTimer: NodeJS.Timeout | null;
   child: ChildProcess | null;
+  queued: QueuedCollectorTask<string> | null;
   running: boolean;
   cleanupRegistered: boolean;
   started: boolean;
@@ -27,12 +36,15 @@ function schedulerState(): SchedulerState {
     interval: null,
     marketTimer: null,
     child: null,
+    queued: null,
     running: false,
     cleanupRegistered: false,
     started: false,
   };
 
-  return globalThis.__stockInfoScheduler;
+  const state = globalThis.__stockInfoScheduler;
+  state.queued ??= null;
+  return state;
 }
 
 function log(message: string): void {
@@ -43,6 +55,56 @@ function runWhenMarketClosed(): boolean {
   return ["1", "true", "yes", "on"].includes(
     (process.env[runWhenMarketClosedEnv] ?? "").trim().toLowerCase()
   );
+}
+
+function runStockInfoProcess(state: SchedulerState): Promise<string> {
+  const session = getMarketSession();
+
+  if (!session.isOpen && !runWhenMarketClosed()) {
+    syncMarketSchedule(state, "market closed during run check");
+    return Promise.resolve(`Skipped stock-info.ts because ${session.reason}.`);
+  }
+
+  log("Starting stock-info.ts");
+  const args = existsSync(".env") ? ["--env-file=.env", "stock-info.ts"] : ["stock-info.ts"];
+  const child = spawn(process.execPath, args, {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+  state.child = child;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (message: string): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      if (state.child === child) {
+        state.child = null;
+      }
+      resolve(message);
+    };
+
+    child.once("error", (error) => {
+      finish(`stock-info.ts failed to start: ${error.message}`);
+    });
+    child.once("close", (code, signal) => {
+      if (signal) {
+        finish(`stock-info.ts stopped by ${signal}.`);
+        return;
+      }
+
+      if (code === 0) {
+        finish("stock-info.ts completed successfully.");
+        return;
+      }
+
+      finish(`stock-info.ts exited with code ${code ?? "unknown"}.`);
+    });
+  });
 }
 
 function runStockInfo(state: SchedulerState): void {
@@ -60,49 +122,31 @@ function runStockInfo(state: SchedulerState): void {
   }
 
   state.running = true;
-  log("Starting stock-info.ts");
+  log("Queued stock-info.ts for the shared browser collector slot.");
+  const queued = enqueueCollectorTask(() => runStockInfoProcess(state));
+  state.queued = queued;
 
-  const args = existsSync(".env") ? ["--env-file=.env", "stock-info.ts"] : ["stock-info.ts"];
-  const child = spawn(process.execPath, args, {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: "inherit",
-  });
-  let settled = false;
-
-  state.child = child;
-
-  const finish = (message: string): void => {
-    if (settled) {
-      return;
-    }
-
-    settled = true;
-    log(message);
-
-    if (state.child === child) {
-      state.child = null;
-    }
-
-    state.running = false;
-  };
-
-  child.once("error", (error) => {
-    finish(`stock-info.ts failed to start: ${error.message}`);
-  });
-  child.once("close", (code, signal) => {
-    if (signal) {
-      finish(`stock-info.ts stopped by ${signal}.`);
-      return;
-    }
-
-    if (code === 0) {
-      finish("stock-info.ts completed successfully.");
-      return;
-    }
-
-    finish(`stock-info.ts exited with code ${code ?? "unknown"}.`);
-  });
+  void queued.result
+    .then((result) => {
+      log(
+        result.status === "cancelled"
+          ? "Cancelled queued stock-info.ts run."
+          : result.value
+      );
+    })
+    .catch((error: unknown) => {
+      log(
+        `stock-info.ts queue failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    })
+    .finally(() => {
+      if (state.queued === queued) {
+        state.queued = null;
+      }
+      state.running = false;
+    });
 }
 
 function clearStockInfoInterval(state: SchedulerState, reason: string): void {
@@ -125,6 +169,11 @@ function clearMarketTimer(state: SchedulerState): void {
 }
 
 function stopActiveRun(state: SchedulerState, reason: string): void {
+  if (state.queued?.cancel()) {
+    log(`Cancelling queued stock-info.ts run (${reason}).`);
+    return;
+  }
+
   if (!state.child || state.child.killed) {
     return;
   }
@@ -159,7 +208,9 @@ function ensureStockInfoInterval(state: SchedulerState): boolean {
   }, stockInfoIntervalMs);
   state.interval.unref();
 
-  log("Started stock-info.ts scheduler; interval=60s.");
+  log(
+    `Started stock-info.ts scheduler; interval=${stockInfoIntervalMs / 1000}s.`
+  );
   return true;
 }
 

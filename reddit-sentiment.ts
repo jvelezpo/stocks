@@ -15,6 +15,7 @@ import {
   runOpencodePrompt,
 } from "./lib/opencode-cli.ts";
 import { ensureStockSchema, database } from "./lib/database.ts";
+import { blockUnneededPageResources } from "./lib/puppeteer-page.ts";
 
 type RedditConfig = {
   timeoutMs: number;
@@ -491,6 +492,7 @@ async function collectNewWallStreetBetsPosts(
     });
     const page = await browser.newPage();
 
+    await blockUnneededPageResources(page);
     await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent(redditChromeUserAgent);
     await page.setExtraHTTPHeaders({ "accept-language": "en-US,en;q=0.9" });

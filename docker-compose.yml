@@ -40,6 +40,7 @@ services:
     depends_on:
       - db
       - opencode
+    init: true
     restart: unless-stopped
     shm_size: 1gb
 

@@ -14,7 +14,7 @@ It collects quote snapshots from Yahoo Finance, stores them in a local libSQL da
 - Optional OpenCode analysis for longer-form recommendations and HFT-style signals
 - libSQL-backed persistence for quote history, captured page documents, and LLM output
 - Admin-only symbol management at `/admin/symbols` (CRUD + active toggle, stored in the `tracked_symbols` table)
-- Five-minute r/wallstreetbets monitor for new posts mentioning `buy`, `sell`, `short`, or `long`
+- Configurable r/wallstreetbets monitor for new posts mentioning `buy`, `sell`, `short`, or `long`
 - AI-generated Reddit sentiment summaries with dashboard keyword and timeframe filters
 
 ## Tech Stack
@@ -75,6 +75,9 @@ LLM analysis uses the OpenCode service in Compose. The service runs the official
 | --- | --- | --- |
 | `SYMBOLS` | No | Legacy seed only: when the `tracked_symbols` table is empty it is seeded once from this comma-separated list or JSON array. Afterwards symbols are managed in the DB at `/admin/symbols` (admin only). |
 | `STOCK_INFO_RUN_WHEN_MARKET_CLOSED` | No | Set to `true` to keep the collector running outside regular US market hours. |
+| `STOCK_INFO_INTERVAL_MS` | No | Quote collector interval in milliseconds. Defaults to `300000` (five minutes); minimum `60000`. |
+| `REDDIT_SENTIMENT_INTERVAL_MS` | No | Reddit collector interval in milliseconds. Defaults to `900000` (15 minutes); minimum `60000`. |
+| `POLYMARKET_INTERVAL_MS` | No | Polymarket refresh interval in milliseconds. Defaults to `900000` (15 minutes); minimum `60000`. |
 | `RUN_SCHEDULERS_IN_WEB_PROCESS` | No | Compatibility escape hatch. Set to `true` only for a single-instance deployment that cannot run the dedicated worker. Defaults to `false`. |
 | `DATABASE_URL` | Yes | libSQL database URL. Default `http://localhost:8080` (local sqld in Docker, persisted in `./data`). Compose overrides to `http://db:8080` in the app. |
 | `DATABASE_AUTH_TOKEN` | No | Authentication token for the database when configured. Local sqld runs without auth by default. |
@@ -170,14 +173,16 @@ npm start
 
 `npm run workers:start` runs the stock-info scheduler outside the Next.js web process. The scheduler:
 
-- runs `stock-info.ts` every 60 seconds
+- runs `stock-info.ts` every five minutes by default
 - only runs during regular US market hours by default
 - waits for the next market open when the market is closed
 - skips overlapping runs if the previous collection is still active
 
-Set `STOCK_INFO_RUN_WHEN_MARKET_CLOSED=true` to disable the market-hours gate.
+Set `STOCK_INFO_RUN_WHEN_MARKET_CLOSED=true` to disable the market-hours gate. Use `STOCK_INFO_INTERVAL_MS`, `REDDIT_SENTIMENT_INTERVAL_MS`, and `POLYMARKET_INTERVAL_MS` to change the default cadence; intervals below one minute are rejected.
 
-The worker also starts independent Reddit and Polymarket schedulers. Reddit runs immediately and every five minutes, operates outside market hours, and skips overlapping runs. Each run opens r/wallstreetbets with Puppeteer, validates rendered posts back to the prior poll boundary, and deduplicates matching posts by their stable Reddit ID. Polymarket refreshes every five minutes and stores snapshots in libSQL so dashboard requests never wait on Polymarket's API.
+The worker also starts Reddit and Polymarket immediately, then repeats them every 15 minutes by default. Scheduled quote and Reddit jobs share one queue, so only one scheduled browser-backed collector runs at a time. Reddit operates outside market hours, validates rendered posts back to the prior poll boundary, and deduplicates matching posts by their stable Reddit ID. Polymarket uses HTTP without Chromium and can refresh independently. Quote and Reddit pages block images, media, and fonts; the quote browser closes before database and LLM processing begins.
+
+Full Yahoo page documents are captured and stored only when general or HFT analysis is due. Structured quote history is still stored on every successful quote pass.
 
 For compatibility, `RUN_SCHEDULERS_IN_WEB_PROCESS=true` restores the old single-process behavior. Do not enable it when multiple web replicas are running.
 
