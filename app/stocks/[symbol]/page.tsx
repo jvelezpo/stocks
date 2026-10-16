@@ -155,6 +155,80 @@ function formatPlanSeconds(value: number | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value}s` : "-";
 }
 
+function analysisSummary(text: string): string {
+  const summary = text.match(
+    /(?:^|\n)\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?Executive Summary(?:\*\*)?(?:\s*\([^)]*\))?\s*:?\s*\n?([\s\S]*?)(?=\n\s{0,3}(?:#{1,6}\s+|\*\*[^*]+\*\*|(?:Key Facts|Bullish|Recommendation|Supporting Reasons|Top Risks)\b)|$)/i
+  )?.[1];
+
+  const content = (summary || text)
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return content.length > 400 ? `${content.slice(0, 397).trimEnd()}…` : content;
+}
+
+function yahooDocumentHighlights(
+  document: { title: string; sourceUrl: string; bodyPreview: string }
+): { quote: string; metrics: [string, string][] } | null {
+  if (!/finance\.yahoo\.com/i.test(document.sourceUrl) && !/yahoo finance/i.test(document.title)) {
+    return null;
+  }
+
+  const text = document.bodyPreview.replace(/\s+/g, " ").trim();
+  const quoteStart = text.indexOf("NYSE - Nasdaq Real Time Price");
+
+  if (quoteStart < 0) {
+    return null;
+  }
+
+  const quoteText = text.slice(quoteStart);
+  const chartStart = quoteText.indexOf("1D 5D 1M");
+  const previousCloseStart = quoteText.indexOf("Previous Close");
+  const quoteEnd = chartStart >= 0
+    ? chartStart
+    : previousCloseStart >= 0
+      ? previousCloseStart
+      : quoteText.length;
+  const quote = quoteText.slice(0, quoteEnd)
+    .replace(/\s+/g, " ")
+    .trim();
+  const metricLabels = [
+    "Previous Close",
+    "Open",
+    "Day's Range",
+    "52 Week Range",
+    "Volume",
+    "Avg. Volume",
+    "Market Cap (intraday)",
+    "Beta (5Y Monthly)",
+    "PE Ratio (TTM)",
+    "EPS (TTM)",
+    "Earnings Date",
+    "1y Target Est",
+  ];
+  const importantMetricLabels = ["Previous Close", "Day's Range", "Market Cap (intraday)"];
+  const metricText = previousCloseStart >= 0 ? quoteText.slice(previousCloseStart) : "";
+  const metrics = metricLabels.flatMap((label) => {
+    const labelStart = metricText.indexOf(label);
+
+    if (labelStart < 0) {
+      return [];
+    }
+
+    const valueStart = labelStart + label.length;
+    const nextLabelStarts = metricLabels
+      .map((nextLabel) => metricText.indexOf(nextLabel, valueStart))
+      .filter((index) => index >= 0);
+    const valueEnd = nextLabelStarts.length > 0 ? Math.min(...nextLabelStarts) : metricText.length;
+    const value = metricText.slice(valueStart, valueEnd).trim();
+
+    return value ? [[label, value] as [string, string]] : [];
+  }).filter(([label]) => importantMetricLabels.includes(label));
+  return { quote, metrics };
+}
+
 export async function generateMetadata({ params }: SymbolPageProps): Promise<Metadata> {
   const { symbol } = await params;
   const detail = await getCachedStockDetail(symbol);
@@ -542,10 +616,12 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
                 <div className="mt-4 text-sm text-zinc-500">
                   {formatDateTime(latestAnalysis.createdAt)}
                 </div>
-                <div className="mt-4 max-h-[28rem] overflow-auto border-l-2 border-zinc-200 pl-4 text-sm leading-6 text-zinc-700">
-                  <pre className="whitespace-pre-wrap break-words font-sans">
-                    {latestAnalysis.analysisText || latestAnalysis.errorText || "No analysis text stored."}
-                  </pre>
+                <div className="mt-4 border-l-2 border-zinc-200 pl-4 text-sm leading-6 text-zinc-700">
+                  <p>
+                    {analysisSummary(
+                      latestAnalysis.analysisText || latestAnalysis.errorText || "No analysis text stored."
+                    )}
+                  </p>
                 </div>
               </div>
             ) : (
@@ -562,32 +638,50 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
               {documents.length === 0 ? (
                 <p className="text-sm leading-6 text-zinc-600">No document rows are stored for this symbol.</p>
               ) : (
-                documents.map((document) => (
-                  <article className="border-t border-zinc-100 pt-4 first:border-t-0 first:pt-0" key={document.id}>
-                    <div className="flex items-start justify-between gap-3">
-                      <h2 className="font-semibold leading-6 text-zinc-950">{document.title || latest.symbol}</h2>
-                      <a
-                        className="rounded-md border border-zinc-200 p-2 text-zinc-500 transition hover:border-zinc-300 hover:text-zinc-900"
-                        href={document.sourceUrl}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </a>
-                    </div>
-                    <div className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
-                      <CalendarClock className="h-3.5 w-3.5" />
-                      {formatDateTime(document.capturedAt)}
-                    </div>
-                    <p className="mt-3 line-clamp-6 text-sm leading-6 text-zinc-600">
-                      {document.bodyPreview || "No preview text stored."}
-                    </p>
-                    <div className="mt-3 text-xs text-zinc-500">
-                      {formatNumber(document.bodyCharCount)} chars
-                      {document.wasTruncated ? " captured with truncation" : " captured"}
-                    </div>
-                  </article>
-                ))
+                documents.map((document) => {
+                  const highlights = yahooDocumentHighlights(document);
+
+                  return (
+                    <article className="border-t border-zinc-100 pt-4 first:border-t-0 first:pt-0" key={document.id}>
+                      <div className="flex items-start justify-between gap-3">
+                        <h2 className="font-semibold leading-6 text-zinc-950">{document.title || latest.symbol}</h2>
+                        <a
+                          className="rounded-md border border-zinc-200 p-2 text-zinc-500 transition hover:border-zinc-300 hover:text-zinc-900"
+                          href={document.sourceUrl}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      </div>
+                      <div className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+                        <CalendarClock className="h-3.5 w-3.5" />
+                        {formatDateTime(document.capturedAt)}
+                      </div>
+                      {highlights ? (
+                        <div className="mt-3 space-y-3">
+                          {highlights.quote && (
+                            <p className="line-clamp-2 text-sm leading-5 text-zinc-700">{highlights.quote}</p>
+                          )}
+                          {highlights.metrics.length > 0 && (
+                            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
+                              {highlights.metrics.map(([label, value]) => (
+                                <div key={label}>
+                                  <dt className="text-xs text-zinc-500">{label}</dt>
+                                  <dd className="mt-1 line-clamp-1 text-sm font-medium text-zinc-900">{value}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-3 line-clamp-3 text-sm leading-5 text-zinc-600">
+                          {document.bodyPreview || "No preview text stored."}
+                        </p>
+                      )}
+                    </article>
+                  );
+                })
               )}
             </div>
           </div>

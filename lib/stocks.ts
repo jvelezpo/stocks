@@ -588,7 +588,7 @@ export async function getStockDetail(symbol: string): Promise<StockDetail | null
                 source_url,
                 body_char_count,
                 was_truncated,
-                substr(body_text, 1, 1400) AS body_preview
+                substr(body_text, 1, 5000) AS body_preview
               FROM stock_documents
               WHERE symbol = ?
               ORDER BY captured_at DESC, id DESC
