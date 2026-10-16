@@ -24,22 +24,21 @@
   "license": "ISC",
   "dependencies": {
     "@libsql/client": "^0.17.3",
-    "@types/react": "^19.2.15",
-    "@types/react-dom": "^19.2.3",
-    "autoprefixer": "^10.4.27",
     "jose": "^6.2.12",
     "lucide-react": "^1.17.0",
     "next": "^16.2.7",
-    "postcss": "^8.5.8",
     "puppeteer": "^25.1.0",
-    "puppeteer-core": "^25.1.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "resend": "^6.30.0",
-    "tailwindcss": "^3.4.19"
+    "resend": "^6.30.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "autoprefixer": "^10.4.27",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^3.4.19",
     "typescript": "^5.9.3"
   }
 }

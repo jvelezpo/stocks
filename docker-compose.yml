@@ -20,8 +20,6 @@ services:
   app:
     build: .
     image: stocks:latest
-    # Puppeteer's chrome-headless-shell is downloaded as linux/amd64.
-    platform: linux/amd64
     container_name: stocks
     ports:
       - "5000:5000"

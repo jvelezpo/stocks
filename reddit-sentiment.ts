@@ -498,10 +498,14 @@ async function collectNewWallStreetBetsPosts(
 
   try {
     log("Launching Puppeteer for Reddit.");
+    const configuredExecutablePath =
+      process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
     browser = await puppeteer.launch({
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      executablePath: await puppeteer.executablePath({ headless: "shell" }),
-      headless: "shell",
+      executablePath:
+        configuredExecutablePath ||
+        (await puppeteer.executablePath({ headless: "shell" })),
+      headless: configuredExecutablePath ? true : "shell",
     });
     const page = await browser.newPage();
 
