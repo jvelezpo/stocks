@@ -28,10 +28,10 @@ import { SymbolPageRefresher } from "../../../components/SymbolPageRefresher";
 import { StockChat } from "../../../components/StockChat";
 import { StockRedditAnalysisForm } from "../../../components/StockRedditAnalysisForm";
 import { hasRole, SESSION_COOKIE_NAME, verifySessionToken } from "../../../lib/auth";
-import { getStockRedditAnalyses } from "../../../lib/stock-reddit-analysis";
 import {
   getCachedStockChartHistory,
   getCachedStockDetail,
+  getCachedStockRedditAnalyses,
 } from "../../../lib/dashboard-cache";
 
 export const dynamic = "force-dynamic";
@@ -258,7 +258,7 @@ export default async function SymbolPage({ params }: SymbolPageProps) {
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   const [chartHistory, redditAnalyses, session] = await Promise.all([
     getCachedStockChartHistory(latest.symbol, "1d"),
-    getStockRedditAnalyses(latest.symbol, 5),
+    getCachedStockRedditAnalyses(latest.symbol, 5),
     sessionToken ? verifySessionToken(sessionToken) : null,
   ]);
   const isAdmin = Boolean(session && hasRole(session.user.role, "admin"));

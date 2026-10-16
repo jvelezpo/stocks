@@ -1,4 +1,16 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+
+if (existsSync(".env") && typeof process.loadEnvFile === "function") {
+  process.loadEnvFile(".env");
+}
+
+const { database, migrateDatabase } = await import("../lib/database.ts");
+try {
+  await migrateDatabase();
+} finally {
+  database.close();
+}
 
 const devPort = process.env.PORT?.trim() || "5000";
 const processes = [

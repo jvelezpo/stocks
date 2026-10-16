@@ -10,8 +10,10 @@ import {
   startStockInfoScheduler,
   stopStockInfoScheduler,
 } from "./lib/stock-info-scheduler.ts";
+import { migrateDatabase } from "./lib/database.ts";
 
 // Dedicated process entry point for all background collectors.
+await migrateDatabase();
 startStockInfoScheduler();
 startRedditSentimentScheduler();
 startPolymarketScheduler();

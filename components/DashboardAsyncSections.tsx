@@ -1,13 +1,13 @@
 import { Activity } from "lucide-react";
 import Link from "next/link";
-import { getCachedPolymarketStockMarketGroups } from "../lib/dashboard-cache";
+import {
+  getCachedPolymarketStockMarketGroups,
+  getCachedRedditSentimentAnalyses,
+  getCachedRedditStockMentionLists,
+} from "../lib/dashboard-cache";
 import { formatDateTime } from "../lib/format";
 import { REDDIT_KEYWORDS, type RedditKeyword } from "../lib/reddit-core";
-import {
-  getRedditSentimentAnalyses,
-  getRedditStockMentionLists,
-  type RedditStockMention,
-} from "../lib/reddit";
+import { type RedditStockMention } from "../lib/reddit";
 import { PolymarketSignals } from "./PolymarketSignals";
 import { RedditPostLinksButton } from "./RedditPostLinksButton";
 import { RedditSentimentRefreshButton } from "./RedditSentimentRefreshButton";
@@ -68,8 +68,8 @@ export async function RedditSentimentSection({
   timeframe: RedditTimeframe;
 }) {
   const [analyses, stockMentions] = await Promise.all([
-    getRedditSentimentAnalyses({ keyword, since, limit: 12 }),
-    getRedditStockMentionLists({ since, limit: 5 }),
+    getCachedRedditSentimentAnalyses(keyword, since, 12),
+    getCachedRedditStockMentionLists(since, 5),
   ]);
 
   return (

@@ -1,6 +1,6 @@
 import { createHash, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import * as jose from "jose";
-import { database } from "./database.ts";
+import { database, ensureStockSchema } from "./database.ts";
 
 export const USER_ROLES = ["admin", "user", "guest"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -87,47 +87,7 @@ function safeEqualHex(a: string, b: string): boolean {
 }
 
 export async function ensureAuthSchema(): Promise<void> {
-  await database.executeMultiple(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE,
-      role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user', 'guest')),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      last_login_at TEXT NOT NULL DEFAULT '',
-      is_active INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
-    CREATE INDEX IF NOT EXISTS idx_users_role ON users (role);
-
-    CREATE TABLE IF NOT EXISTS auth_otp_codes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id TEXT NOT NULL,
-      email TEXT NOT NULL,
-      code_hash TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      consumed_at TEXT NOT NULL DEFAULT '',
-      attempt_count INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_auth_otp_codes_email_created
-      ON auth_otp_codes (email, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS auth_sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      revoked_at TEXT NOT NULL DEFAULT '',
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id
-      ON auth_sessions (user_id);
-  `);
+  await ensureStockSchema();
 }
 
 type UserRow = {
@@ -388,12 +348,28 @@ export async function verifySessionToken(token: string): Promise<(SessionPayload
     if (!sub || !jti) return null;
 
     await ensureAuthSchema();
-    const session = await database.execute({
-      sql: "SELECT user_id, expires_at, revoked_at FROM auth_sessions WHERE id = ? LIMIT 1",
+    const sessionAndUser = await database.execute({
+      sql: `
+        SELECT
+          sessions.user_id,
+          sessions.expires_at,
+          sessions.revoked_at,
+          users.id,
+          users.email,
+          users.role,
+          users.created_at,
+          users.updated_at,
+          users.last_login_at,
+          users.is_active
+        FROM auth_sessions AS sessions
+        JOIN users ON users.id = sessions.user_id
+        WHERE sessions.id = ?
+        LIMIT 1
+      `,
       args: [jti],
     });
-    if (session.rows.length === 0) return null;
-    const sessionRow = session.rows[0] as unknown as {
+    if (sessionAndUser.rows.length === 0) return null;
+    const sessionRow = sessionAndUser.rows[0] as unknown as UserRow & {
       user_id: string;
       expires_at: string;
       revoked_at: string;
@@ -402,8 +378,8 @@ export async function verifySessionToken(token: string): Promise<(SessionPayload
     if (new Date(sessionRow.expires_at).getTime() <= Date.now()) return null;
     if (String(sessionRow.user_id) !== sub) return null;
 
-    const user = await getUserById(sub);
-    if (!user || !user.isActive) return null;
+    const user = mapUser(sessionRow);
+    if (!user.isActive) return null;
 
     // Use the DB role as source of truth (handles role changes after login).
     return {

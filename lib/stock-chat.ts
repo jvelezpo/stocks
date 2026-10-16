@@ -14,6 +14,7 @@ import {
   resolveOpencodeCliPath,
   runOpencodePrompt,
 } from "./opencode-cli.ts";
+import { storesLlmDebugPayloads } from "./llm-debug.ts";
 
 const visitorCookieName = "stock_chat_visitor";
 const visitorCookieMaxAgeSeconds = 60 * 60 * 24 * 365;
@@ -39,6 +40,8 @@ const failedAssistantContent =
   "I couldn't complete that request. Please try again.";
 const staleAssistantContent =
   "The previous request did not finish. Please try again.";
+let nextRateLimitPruneAt = 0;
+let nextEmptySessionPruneAt = 0;
 
 export type ChatSessionStatus = "idle" | "processing";
 export type ChatMessageRole = "user" | "assistant";
@@ -613,6 +616,10 @@ async function pruneExpiredRateLimits(
   transaction: Transaction,
   now: Date
 ): Promise<void> {
+  if (now.getTime() < nextRateLimitPruneAt) {
+    return;
+  }
+
   const cutoff = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
 
   await transaction.execute({
@@ -627,6 +634,35 @@ async function pruneExpiredRateLimits(
     `,
     args: [cutoff],
   });
+  nextRateLimitPruneAt = now.getTime() + 60 * 60_000;
+}
+
+async function pruneEmptySessions(
+  transaction: Transaction,
+  now: Date
+): Promise<void> {
+  if (now.getTime() < nextEmptySessionPruneAt) {
+    return;
+  }
+
+  const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60_000).toISOString();
+
+  await transaction.execute({
+    sql: `
+      DELETE FROM stock_chat_sessions
+      WHERE id IN (
+        SELECT session.id
+        FROM stock_chat_sessions AS session
+        LEFT JOIN stock_chat_messages AS message
+          ON message.session_id = session.id
+        WHERE message.id IS NULL
+          AND session.created_at < ?
+        LIMIT 100
+      )
+    `,
+    args: [cutoff],
+  });
+  nextEmptySessionPruneAt = now.getTime() + 24 * 60 * 60_000;
 }
 
 const sessionSummarySql = `
@@ -694,32 +730,6 @@ async function requireOwnedSession(
   return session;
 }
 
-async function sessionMessages(
-  db: SqlExecutor,
-  sessionId: string
-): Promise<ChatMessage[]> {
-  const result = await rows<ChatMessageRow>(
-    db,
-    `
-      SELECT
-        id,
-        session_id,
-        turn_id,
-        role,
-        content,
-        status,
-        error_text,
-        created_at
-      FROM stock_chat_messages
-      WHERE session_id = ?
-      ORDER BY id ASC
-    `,
-    [sessionId]
-  );
-
-  return result.map(mapMessage);
-}
-
 async function assertStockExists(symbol: string): Promise<StockDetail> {
   const detail = await getStockDetail(symbol);
 
@@ -732,10 +742,10 @@ async function assertStockExists(symbol: string): Promise<StockDetail> {
 
 async function assertStockViewExists(symbol: string): Promise<void> {
   await ensureStockSchema();
-  const result = await rows<CountRow>(
+  const result = await rows<{ found: number }>(
     database,
     `
-      SELECT COUNT(*) AS count
+      SELECT 1 AS found
       FROM stock_history
       WHERE symbol = ?
       LIMIT 1
@@ -743,7 +753,7 @@ async function assertStockViewExists(symbol: string): Promise<void> {
     [symbol]
   );
 
-  if (Number(result[0]?.count ?? 0) === 0) {
+  if (result.length === 0) {
     throw new StockChatError(404, "stock_not_found", "Stock view not found.");
   }
 }
@@ -784,6 +794,7 @@ export async function createChatSession(
       "Too many chat sessions were created. Please wait and try again.";
 
     await pruneExpiredRateLimits(transaction, now);
+    await pruneEmptySessions(transaction, now);
     await consumeRateLimit(
       transaction,
       `session-create-visitor:${visitorHash}`,
@@ -811,24 +822,6 @@ export async function createChatSession(
       createLimitMessage
     );
 
-    const emptySessionCutoff = new Date(
-      now.getTime() - 30 * 24 * 60 * 60_000
-    ).toISOString();
-    await transaction.execute({
-      sql: `
-        DELETE FROM stock_chat_sessions
-        WHERE id IN (
-          SELECT session.id
-          FROM stock_chat_sessions AS session
-          LEFT JOIN stock_chat_messages AS message
-            ON message.session_id = session.id
-          WHERE message.id IS NULL
-            AND session.created_at < ?
-          LIMIT 100
-        )
-      `,
-      args: [emptySessionCutoff],
-    });
     const existing = await rows<CountRow>(
       transaction,
       `
@@ -889,6 +882,7 @@ async function insertFailedAssistant(
   model: string,
   now: string
 ): Promise<void> {
+  const storeDebug = storesLlmDebugPayloads();
   await transaction.execute({
     sql: `
       INSERT INTO stock_chat_messages (
@@ -906,7 +900,15 @@ async function insertFailedAssistant(
       ) VALUES (?, ?, 'assistant', ?, 'failed', ?, ?, ?, '', '{}', ?)
       ON CONFLICT (session_id, turn_id, role) DO NOTHING
     `,
-    args: [sessionId, turnId, content, content, provider, model, now],
+    args: [
+      sessionId,
+      turnId,
+      content,
+      content,
+      storeDebug ? provider : "",
+      storeDebug ? model : "",
+      now,
+    ],
   });
 }
 
@@ -989,24 +991,72 @@ export async function getChatSession(
   const sessionId = validateSessionId(rawSessionId);
   await ensureStockSchema();
 
-  await writeTransaction(async (transaction) => {
-    const session = await requireOwnedSession(
-      transaction,
-      visitorHash,
-      symbol,
-      sessionId
+  const readDetail = async (): Promise<{
+    session: ChatSessionRow;
+    messages: ChatMessage[];
+  }> => {
+    const [sessionResult, messageResult] = await database.batch(
+      [
+        {
+          sql: `
+            ${sessionSummarySql}
+            WHERE session.id = ?
+              AND session.visitor_hash = ?
+              AND session.symbol = ?
+            LIMIT 1
+          `,
+          args: [sessionId, visitorHash, symbol],
+        },
+        {
+          sql: `
+            SELECT
+              id,
+              session_id,
+              turn_id,
+              role,
+              content,
+              status,
+              error_text,
+              created_at
+            FROM stock_chat_messages
+            WHERE session_id = ?
+            ORDER BY id ASC
+          `,
+          args: [sessionId],
+        },
+      ],
+      "read"
     );
-    await recoverStaleSession(transaction, session, new Date());
-  });
+    const session = sessionResult.rows[0] as unknown as ChatSessionRow | undefined;
 
-  const [session, messages] = await Promise.all([
-    requireOwnedSession(database, visitorHash, symbol, sessionId),
-    sessionMessages(database, sessionId),
-  ]);
+    if (!session) {
+      throw new StockChatError(404, "session_not_found", "Chat session not found.");
+    }
+
+    return {
+      session,
+      messages: (messageResult.rows as unknown as ChatMessageRow[]).map(mapMessage),
+    };
+  };
+
+  let detail = await readDetail();
+
+  if (isExpiredProcessingSession(detail.session, new Date())) {
+    await writeTransaction(async (transaction) => {
+      const session = await requireOwnedSession(
+        transaction,
+        visitorHash,
+        symbol,
+        sessionId
+      );
+      await recoverStaleSession(transaction, session, new Date());
+    });
+    detail = await readDetail();
+  }
 
   return {
-    session: mapSession(session),
-    messages,
+    session: mapSession(detail.session),
+    messages: detail.messages,
   };
 }
 
@@ -1414,6 +1464,7 @@ async function completeTurn(
   config: OpencodeConfig,
   result: OpencodeResult
 ): Promise<ChatSendResult> {
+  const storeDebug = storesLlmDebugPayloads();
   const assistantMessage = await writeTransaction(async (transaction) => {
     const timestamp = new Date().toISOString();
     const unlockResult = await transaction.execute({
@@ -1464,7 +1515,7 @@ async function completeTurn(
           llm_response_id,
           usage_json,
           created_at
-        ) VALUES (?, ?, 'assistant', ?, 'completed', '', 'opencode', ?, ?, ?, ?)
+        ) VALUES (?, ?, 'assistant', ?, 'completed', '', ?, ?, ?, ?, ?)
         RETURNING
           id,
           session_id,
@@ -1479,9 +1530,10 @@ async function completeTurn(
         sessionId,
         input.turnId,
         result.content,
-        result.model || config.model,
-        result.responseId,
-        result.usageJson,
+        storeDebug ? "opencode" : "",
+        storeDebug ? result.model || config.model : "",
+        storeDebug ? result.responseId : "",
+        storeDebug ? result.usageJson : "{}",
         timestamp,
       ]
     );

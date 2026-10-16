@@ -12,6 +12,7 @@ import {
   resolveOpencodeCliPath,
   runOpencodePrompt,
 } from "./lib/opencode-cli.ts";
+import { storesLlmDebugPayloads } from "./lib/llm-debug.ts";
 
 type QuoteStat = {
   label: string;
@@ -66,6 +67,7 @@ const promptPath = "./prompts/prompt.md";
 const hftPromptPath = "./prompts/hft.md";
 const llmAnalysisCooldownMs = 5 * 60 * 60 * 1000; // 5 hours
 const hftAnalysisCooldownMs = 20 * 60 * 1000; // 20 minutes
+const storedDocumentPreviewChars = 5_000;
 
 function requestedSymbolFromArgs(): string | undefined {
   const index = process.argv.indexOf("--symbol");
@@ -80,6 +82,18 @@ type LatestAnalysisRun = {
   status: string;
   provider: string;
   model: string;
+};
+
+type AnalysisPlanRow = {
+  symbol: string;
+  general_created_at: string | null;
+  general_status: string | null;
+  general_provider: string | null;
+  general_model: string | null;
+  hft_created_at: string | null;
+  hft_status: string | null;
+  hft_provider: string | null;
+  hft_model: string | null;
 };
 
 type HftHistoryRow = {
@@ -488,6 +502,7 @@ async function storePageDocument(
   url: string,
   document: PageDocument
 ): Promise<bigint> {
+  const bodyText = document.bodyText.slice(0, storedDocumentPreviewChars);
   const result = await db.execute({
     sql: `
       INSERT INTO stock_documents (
@@ -507,9 +522,9 @@ async function storePageDocument(
       symbol,
       url,
       document.title,
-      document.bodyText,
+      bodyText,
       document.bodyCharCount,
-      document.wasTruncated ? 1 : 0
+      document.wasTruncated || document.bodyText.length > bodyText.length ? 1 : 0
     ],
   });
 
@@ -526,6 +541,7 @@ async function storeCompletedAnalysis(
   inputText: string,
   result: LlmResult
 ): Promise<bigint> {
+  const storeDebug = storesLlmDebugPayloads();
   const recommendation = extractRecommendation(result.analysisText);
   const insertResult = await db.execute({
     sql: `
@@ -559,14 +575,14 @@ async function storeCompletedAnalysis(
       "completed",
       recommendation,
       promptPath,
-      promptText,
+      storeDebug ? promptText : "",
       inputText.length,
       result.analysisText.length,
       result.analysisText,
       "",
-      result.responseId,
-      result.usageJson,
-      result.rawResponseJson
+      storeDebug ? result.responseId : "",
+      storeDebug ? result.usageJson : "{}",
+      storeDebug ? result.rawResponseJson : "{}"
     ],
   });
 
@@ -583,6 +599,7 @@ async function storeFailedAnalysis(
   inputText: string,
   errorText: string
 ): Promise<bigint> {
+  const storeDebug = storesLlmDebugPayloads();
   const result = await db.execute({
     sql: `
       INSERT INTO stock_analyses (
@@ -615,7 +632,7 @@ async function storeFailedAnalysis(
       "failed",
       "",
       promptPath,
-      promptText,
+      storeDebug ? promptText : "",
       inputText.length,
       0,
       "",
@@ -679,6 +696,7 @@ async function storeCompletedHftAnalysis(
   result: LlmResult,
   parsed: HftParsedResult
 ): Promise<bigint> {
+  const storeDebug = storesLlmDebugPayloads();
   const insertResult = await db.execute({
     sql: `
       INSERT INTO stock_hft_analyses (
@@ -716,15 +734,15 @@ async function storeCompletedHftAnalysis(
       parsed.confidence,
       parsed.marketRegime,
       hftPromptPath,
-      promptText,
+      storeDebug ? promptText : "",
       inputText.length,
       result.analysisText.length,
       result.analysisText,
       "",
-      result.responseId,
-      result.usageJson,
-      result.rawResponseJson,
-      JSON.stringify(historyRows)
+      storeDebug ? result.responseId : "",
+      storeDebug ? result.usageJson : "{}",
+      storeDebug ? result.rawResponseJson : "{}",
+      storeDebug ? JSON.stringify(historyRows) : "[]"
     ],
   });
 
@@ -743,6 +761,7 @@ async function storeFailedHftAnalysis(
   errorText: string,
   analysisText = ""
 ): Promise<bigint> {
+  const storeDebug = storesLlmDebugPayloads();
   const result = await db.execute({
     sql: `
       INSERT INTO stock_hft_analyses (
@@ -780,7 +799,7 @@ async function storeFailedHftAnalysis(
       null,
       "",
       hftPromptPath,
-      promptText,
+      storeDebug ? promptText : "",
       inputText.length,
       analysisText.length,
       analysisText,
@@ -788,47 +807,11 @@ async function storeFailedHftAnalysis(
       "",
       "{}",
       "{}",
-      JSON.stringify(historyRows)
+      storeDebug ? JSON.stringify(historyRows) : "[]"
     ],
   });
 
   return lastInsertRowId(result, "stock_hft_analyses");
-}
-
-async function latestAnalysisRun(
-  db: Client,
-  symbol: string
-): Promise<LatestAnalysisRun | null> {
-  const result = await db.execute({
-    sql: `
-      SELECT created_at, status, provider, model
-      FROM stock_analyses
-      WHERE symbol = ?
-      ORDER BY created_at DESC, id DESC
-      LIMIT 1
-    `,
-    args: [symbol],
-  });
-
-  return (result.rows[0] as unknown as LatestAnalysisRun | undefined) ?? null;
-}
-
-async function latestHftAnalysisRun(
-  db: Client,
-  symbol: string
-): Promise<LatestAnalysisRun | null> {
-  const result = await db.execute({
-    sql: `
-      SELECT created_at, status, provider, model
-      FROM stock_hft_analyses
-      WHERE symbol = ?
-      ORDER BY created_at DESC, id DESC
-      LIMIT 1
-    `,
-    args: [symbol],
-  });
-
-  return (result.rows[0] as unknown as LatestAnalysisRun | undefined) ?? null;
 }
 
 function analysisIsDue(
@@ -864,42 +847,122 @@ function logCooldownSkip(
   );
 }
 
-async function getAnalysisPlan(
+async function getAnalysisPlans(
   db: Client,
-  symbol: string,
+  symbols: string[],
   llmConfig: LlmConfig | null
-): Promise<AnalysisPlan> {
+): Promise<Map<string, AnalysisPlan>> {
+  const plans = new Map<string, AnalysisPlan>();
+
   if (!llmConfig) {
-    return { runGeneral: false, runHft: false };
+    for (const symbol of symbols) {
+      plans.set(symbol, { runGeneral: false, runHft: false });
+    }
+    return plans;
   }
 
-  const [latestGeneral, latestHft] = await Promise.all([
-    latestAnalysisRun(db, symbol),
-    latestHftAnalysisRun(db, symbol),
-  ]);
-  const general = analysisIsDue(latestGeneral, llmAnalysisCooldownMs);
-  const hft = analysisIsDue(latestHft, hftAnalysisCooldownMs);
+  const result = await db.execute({
+    sql: `
+      WITH requested_symbols AS (
+        SELECT CAST(value AS TEXT) AS symbol
+        FROM json_each(?)
+      ),
+      latest_general AS (
+        SELECT symbol, created_at, status, provider, model
+        FROM (
+          SELECT
+            analysis.symbol,
+            analysis.created_at,
+            analysis.status,
+            analysis.provider,
+            analysis.model,
+            ROW_NUMBER() OVER (
+              PARTITION BY analysis.symbol
+              ORDER BY analysis.created_at DESC, analysis.id DESC
+            ) AS row_number
+          FROM stock_analyses AS analysis
+          JOIN requested_symbols USING (symbol)
+        )
+        WHERE row_number = 1
+      ),
+      latest_hft AS (
+        SELECT symbol, created_at, status, provider, model
+        FROM (
+          SELECT
+            analysis.symbol,
+            analysis.created_at,
+            analysis.status,
+            analysis.provider,
+            analysis.model,
+            ROW_NUMBER() OVER (
+              PARTITION BY analysis.symbol
+              ORDER BY analysis.created_at DESC, analysis.id DESC
+            ) AS row_number
+          FROM stock_hft_analyses AS analysis
+          JOIN requested_symbols USING (symbol)
+        )
+        WHERE row_number = 1
+      )
+      SELECT
+        requested.symbol,
+        general.created_at AS general_created_at,
+        general.status AS general_status,
+        general.provider AS general_provider,
+        general.model AS general_model,
+        hft.created_at AS hft_created_at,
+        hft.status AS hft_status,
+        hft.provider AS hft_provider,
+        hft.model AS hft_model
+      FROM requested_symbols AS requested
+      LEFT JOIN latest_general AS general USING (symbol)
+      LEFT JOIN latest_hft AS hft USING (symbol)
+    `,
+    args: [JSON.stringify(symbols)],
+  });
 
-  if (!general.due && latestGeneral) {
-    logCooldownSkip(
-      symbol,
-      "LLM analysis",
-      latestGeneral,
-      general.ageMs,
-      llmAnalysisCooldownMs
-    );
-  }
-  if (!hft.due && latestHft) {
-    logCooldownSkip(
-      symbol,
-      "HFT analysis",
-      latestHft,
-      hft.ageMs,
-      hftAnalysisCooldownMs
-    );
+  for (const row of result.rows as unknown as AnalysisPlanRow[]) {
+    const latestGeneral: LatestAnalysisRun | null = row.general_created_at
+      ? {
+          created_at: row.general_created_at,
+          status: row.general_status ?? "",
+          provider: row.general_provider ?? "",
+          model: row.general_model ?? "",
+        }
+      : null;
+    const latestHft: LatestAnalysisRun | null = row.hft_created_at
+      ? {
+          created_at: row.hft_created_at,
+          status: row.hft_status ?? "",
+          provider: row.hft_provider ?? "",
+          model: row.hft_model ?? "",
+        }
+      : null;
+    const general = analysisIsDue(latestGeneral, llmAnalysisCooldownMs);
+    const hft = analysisIsDue(latestHft, hftAnalysisCooldownMs);
+
+    if (!general.due && latestGeneral) {
+      logCooldownSkip(
+        row.symbol,
+        "LLM analysis",
+        latestGeneral,
+        general.ageMs,
+        llmAnalysisCooldownMs
+      );
+    }
+    if (!hft.due && latestHft) {
+      logCooldownSkip(
+        row.symbol,
+        "HFT analysis",
+        latestHft,
+        hft.ageMs,
+        hftAnalysisCooldownMs
+      );
+    }
+
+    plans.set(row.symbol, { runGeneral: general.due, runHft: hft.due });
   }
 
-  return { runGeneral: general.due, runHft: hft.due };
+  return plans;
 }
 
 async function acceptYahooConsent(page: Page): Promise<boolean> {
@@ -1272,10 +1335,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const analysisPlans = new Map<string, AnalysisPlan>();
-    for (const symbol of symbols) {
-      analysisPlans.set(symbol, await getAnalysisPlan(db, symbol, llmConfig));
-    }
+    const analysisPlans = await getAnalysisPlans(db, symbols, llmConfig);
 
     const failures: string[] = [];
     const scrapedSymbols: ScrapedSymbol[] = [];

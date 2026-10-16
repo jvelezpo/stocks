@@ -138,6 +138,23 @@ test("treats Reddit and Polymarket as optional sources and returns only the late
     ]);
     assert.equal(storedMarketGroups.length, 1);
     assert.equal(storedMarketGroups[0]?.markets[0]?.outcomes[0]?.probability, 0.31);
+    const storedBeforeRepeat = await database.execute(`
+      SELECT id, captured_at
+      FROM polymarket_market_snapshots
+      WHERE symbol = 'TEST'
+      ORDER BY id
+    `);
+    const repeatedRefresh = await refreshPolymarketMarketSnapshots([
+      { symbol: "TEST", name: "Test Corporation" },
+    ]);
+    const storedAfterRepeat = await database.execute(`
+      SELECT id, captured_at
+      FROM polymarket_market_snapshots
+      WHERE symbol = 'TEST'
+      ORDER BY id
+    `);
+    assert.deepEqual(repeatedRefresh, { refreshedSymbols: 1, storedMarkets: 1 });
+    assert.deepEqual(storedAfterRepeat.rows, storedBeforeRepeat.rows);
 
     globals.__stockRedditPostsMock = async () => {
       throw new Error("Reddit unavailable");

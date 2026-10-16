@@ -1,4 +1,9 @@
-import type { Client, ResultSet, Transaction } from "@libsql/client";
+import type {
+  Client,
+  InStatement,
+  ResultSet,
+  Transaction,
+} from "@libsql/client";
 import { readFileSync } from "node:fs";
 import puppeteer, { type Browser, type Page } from "puppeteer";
 import {
@@ -16,6 +21,7 @@ import {
 } from "./lib/opencode-cli.ts";
 import { ensureStockSchema, database } from "./lib/database.ts";
 import { blockUnneededPageResources } from "./lib/puppeteer-page.ts";
+import { storesLlmDebugPayloads } from "./lib/llm-debug.ts";
 
 type RedditConfig = {
   timeoutMs: number;
@@ -361,7 +367,11 @@ async function storeRedditPollBoundary(
         last_seen_post_id = excluded.last_seen_post_id,
         last_seen_posted_at = excluded.last_seen_posted_at,
         updated_at = excluded.updated_at
-      WHERE reddit_monitor_state.last_seen_posted_at <= excluded.last_seen_posted_at
+      WHERE reddit_monitor_state.last_seen_posted_at < excluded.last_seen_posted_at
+        OR (
+          reddit_monitor_state.last_seen_posted_at = excluded.last_seen_posted_at
+          AND reddit_monitor_state.last_seen_post_id < excluded.last_seen_post_id
+        )
     `,
     args: [boundary.postId, boundary.postedAt, new Date().toISOString()],
   });
@@ -449,8 +459,10 @@ async function getNewWallStreetBetsPosts(
   const regularPosts = Array.from(postsById.values()).filter(
     (post) => !post.isStickied
   );
-  const newestPost = [...regularPosts].sort((left, right) =>
-    right.postedAt.localeCompare(left.postedAt)
+  const newestPost = [...regularPosts].sort(
+    (left, right) =>
+      right.postedAt.localeCompare(left.postedAt) ||
+      right.redditPostId.localeCompare(left.redditPostId)
   )[0];
   const newestBoundary = newestPost
     ? { postId: newestPost.redditPostId, postedAt: newestPost.postedAt }
@@ -458,8 +470,9 @@ async function getNewWallStreetBetsPosts(
   const newPosts = previousBoundary
     ? regularPosts.filter(
         (post) =>
-          post.redditPostId !== previousBoundary.postId &&
-          post.postedAt >= previousBoundary.postedAt
+          post.postedAt > previousBoundary.postedAt ||
+          (post.postedAt === previousBoundary.postedAt &&
+            post.redditPostId !== previousBoundary.postId)
       )
     : regularPosts;
 
@@ -570,11 +583,8 @@ async function storeNewPosts(
   posts: RedditPost[]
 ): Promise<number> {
   const discoveredAt = new Date().toISOString();
-  let insertedCount = 0;
-
-  for (const post of posts) {
-    const result = await db.execute({
-      sql: `
+  const statements: InStatement[] = posts.map((post) => ({
+    sql: `
         INSERT OR IGNORE INTO reddit_posts (
           reddit_post_id,
           discovered_at,
@@ -591,25 +601,25 @@ async function storeNewPosts(
           sentiment_analysis_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', 0)
       `,
-      args: [
-        post.redditPostId,
-        discoveredAt,
-        post.postedAt,
-        post.subreddit,
-        post.title,
-        post.author,
-        post.bodyText,
-        post.sourceUrl,
-        JSON.stringify(post.matchedKeywords),
-      ],
-    });
+    args: [
+      post.redditPostId,
+      discoveredAt,
+      post.postedAt,
+      post.subreddit,
+      post.title,
+      post.author,
+      post.bodyText,
+      post.sourceUrl,
+      JSON.stringify(post.matchedKeywords),
+    ],
+  }));
 
-    if (result.rowsAffected > 0) {
-      insertedCount += 1;
-    }
+  if (statements.length === 0) {
+    return 0;
   }
 
-  return insertedCount;
+  const results = await db.batch(statements, "write");
+  return results.reduce((count, result) => count + result.rowsAffected, 0);
 }
 
 function makeAnalysisBatch(
@@ -646,11 +656,10 @@ function parseStoredKeywords(value: string): RedditKeyword[] {
   return REDDIT_KEYWORDS.filter((keyword) => parsed.includes(keyword));
 }
 
-async function claimNextAnalysisBatch(db: Client): Promise<AnalysisBatch | null> {
+async function cleanupExhaustedAnalysisPosts(db: Client): Promise<void> {
   const now = new Date();
   const claimToken = now.toISOString();
   const leaseCutoff = new Date(now.getTime() - processingLeaseMs).toISOString();
-  const retryCutoff = new Date(now.getTime() - failureRetryMs).toISOString();
   const exhaustedResult = await db.execute({
     sql: `
       UPDATE reddit_posts
@@ -667,6 +676,13 @@ async function claimNextAnalysisBatch(db: Client): Promise<AnalysisBatch | null>
       `Moved ${exhaustedResult.rowsAffected} exhausted Reddit analysis queue row(s) to failed.`
     );
   }
+}
+
+async function claimNextAnalysisBatch(db: Client): Promise<AnalysisBatch | null> {
+  const now = new Date();
+  const claimToken = now.toISOString();
+  const leaseCutoff = new Date(now.getTime() - processingLeaseMs).toISOString();
+  const retryCutoff = new Date(now.getTime() - failureRetryMs).toISOString();
 
   const result = await db.execute({
     sql: `
@@ -750,6 +766,7 @@ async function storeCompletedAnalysis(
   promptText: string,
   llmResult: LlmResult
 ): Promise<number> {
+  const storeDebug = storesLlmDebugPayloads();
   const sentiment = parseRedditSentiment(llmResult.analysisText);
   const result = await db.execute({
     sql: `
@@ -782,7 +799,9 @@ async function storeCompletedAnalysis(
       batch.periodStart,
       batch.periodEnd,
       batch.posts.length,
-      JSON.stringify(batch.posts.map((post) => post.redditPostId)),
+      storeDebug
+        ? JSON.stringify(batch.posts.map((post) => post.redditPostId))
+        : "[]",
       JSON.stringify(batch.keywords),
       config.provider,
       llmResult.model,
@@ -791,14 +810,14 @@ async function storeCompletedAnalysis(
       sentiment.summary,
       JSON.stringify(sentiment.trends),
       redditPromptPath,
-      promptText,
+      storeDebug ? promptText : "",
       promptText.length,
       llmResult.analysisText.length,
       llmResult.analysisText,
       "",
-      llmResult.responseId,
-      llmResult.usageJson,
-      llmResult.rawResponseJson,
+      storeDebug ? llmResult.responseId : "",
+      storeDebug ? llmResult.usageJson : "{}",
+      storeDebug ? llmResult.rawResponseJson : "{}",
     ],
   });
 
@@ -813,6 +832,7 @@ async function storeFailedAnalysis(
   error: unknown,
   llmResult: LlmResult | null
 ): Promise<void> {
+  const storeDebug = storesLlmDebugPayloads();
   const errorText = error instanceof Error ? error.message : String(error);
 
   await db.execute({
@@ -846,7 +866,9 @@ async function storeFailedAnalysis(
       batch.periodStart,
       batch.periodEnd,
       batch.posts.length,
-      JSON.stringify(batch.posts.map((post) => post.redditPostId)),
+      storeDebug
+        ? JSON.stringify(batch.posts.map((post) => post.redditPostId))
+        : "[]",
       JSON.stringify(batch.keywords),
       config.provider,
       llmResult?.model || config.model,
@@ -855,14 +877,14 @@ async function storeFailedAnalysis(
       "",
       "[]",
       redditPromptPath,
-      promptText,
+      storeDebug ? promptText : "",
       promptText.length,
       llmResult?.analysisText.length ?? 0,
       llmResult?.analysisText ?? "",
       errorText,
-      llmResult?.responseId ?? "",
-      llmResult?.usageJson ?? "{}",
-      llmResult?.rawResponseJson ?? "{}",
+      storeDebug ? llmResult?.responseId ?? "" : "",
+      storeDebug ? llmResult?.usageJson ?? "{}" : "{}",
+      storeDebug ? llmResult?.rawResponseJson ?? "{}" : "{}",
     ],
   });
 }
@@ -959,6 +981,8 @@ async function analyzePendingPosts(
   const instructions = readFileSync(redditPromptPath, "utf8").trim();
   let failedBatches = 0;
   let processedBatches = 0;
+
+  await cleanupExhaustedAnalysisPosts(db);
 
   for (let index = 0; index < maxAnalysisBatchesPerRun; index += 1) {
     const batch = await claimNextAnalysisBatch(db);

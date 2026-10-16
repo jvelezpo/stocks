@@ -107,6 +107,12 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
       `,
       args: ["already-analyzed"],
     });
+    const schemaVersion = await database.execute(
+      "SELECT version FROM app_schema_migrations"
+    );
+    const authTable = await database.execute(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'auth_sessions'"
+    );
 
     assert.equal(postColumnNames.has("analysis_status"), true);
     assert.equal(postColumnNames.has("analysis_attempt_count"), true);
@@ -117,6 +123,8 @@ test("migrates earlier Reddit tables to the durable queue schema", async () => {
     assert.equal(polymarketColumns.rows.some((row) => row.name === "outcomes_json"), true);
     assert.equal(migratedPost.rows[0]?.analysis_status, "completed");
     assert.equal(Number(migratedPost.rows[0]?.sentiment_analysis_id), 1);
+    assert.deepEqual(schemaVersion.rows.map((row) => Number(row.version)), [1]);
+    assert.equal(authTable.rows.length, 1);
   } finally {
     database.close();
   }

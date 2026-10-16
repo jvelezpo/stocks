@@ -13,6 +13,7 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
   delete process.env.OPENROUTER_MODEL;
   delete process.env.LLM_MAX_OUTPUT_TOKENS;
   process.env.LLM_TIMEOUT_MS = "5000";
+  delete process.env.STORE_LLM_DEBUG_PAYLOADS;
 
   const { ensureStockSchema, database } = await import("./database.ts");
   const {
@@ -150,6 +151,23 @@ test("persists isolated chat history and locks concurrent AI turns", async () =>
     assert.equal(completed.assistantMessage.role, "assistant");
     assert.equal(completed.assistantMessage.status, "completed");
     assert.match(completed.assistantMessage.content, /up 1\.5%/);
+    const storedDebugPayload = await database.execute({
+      sql: `
+        SELECT provider, model, llm_response_id, usage_json
+        FROM stock_chat_messages
+        WHERE id = ?
+      `,
+      args: [completed.assistantMessage.id],
+    });
+    assert.deepEqual(
+      {
+        provider: storedDebugPayload.rows[0]?.provider,
+        model: storedDebugPayload.rows[0]?.model,
+        responseId: storedDebugPayload.rows[0]?.llm_response_id,
+        usage: storedDebugPayload.rows[0]?.usage_json,
+      },
+      { provider: "", model: "", responseId: "", usage: "{}" }
+    );
 
     const repeated = await sendChatMessage(visitorHash, "test-network", "TEST", session.id, {
       turnId: "turn-first-0001",

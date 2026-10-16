@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { isStockChartRange } from "../../../../../lib/stock-chart";
-import { getStockChartHistory } from "../../../../../lib/stocks";
+import { getCachedStockChartHistory } from "../../../../../lib/dashboard-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,10 +23,14 @@ export async function GET(
 
   try {
     const { symbol } = await params;
-    const history = await getStockChartHistory(symbol, range);
+    const history = await getCachedStockChartHistory(symbol, range);
     return Response.json(
       { history },
-      { headers: { "Cache-Control": "no-store" } }
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+        },
+      }
     );
   } catch (error: unknown) {
     console.error("Failed to load stock chart history", error);

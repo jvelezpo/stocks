@@ -54,6 +54,7 @@ export const database: Client = new Proxy({} as Client, {
 });
 
 let schemaPromise: Promise<void> | null = null;
+const currentSchemaVersion = 1;
 
 type ColumnDefinition = {
   name: string;
@@ -167,9 +168,32 @@ async function ensureRedditSchemaMigrations(): Promise<void> {
   `);
 }
 
-export function ensureStockSchema(): Promise<void> {
-  schemaPromise ??= database
-    .executeMultiple(`
+async function hasCurrentSchemaVersion(): Promise<boolean> {
+  try {
+    const result = await database.execute({
+      sql: "SELECT 1 FROM app_schema_migrations WHERE version = ? LIMIT 1",
+      args: [currentSchemaVersion],
+    });
+
+    return result.rows.length > 0;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+
+    if (message.includes("no such table") && message.includes("app_schema_migrations")) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function applySchemaMigrations(): Promise<void> {
+  await database.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS app_schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS stock_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fetched_at TEXT NOT NULL,
@@ -437,12 +461,72 @@ export function ensureStockSchema(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_tracked_symbols_is_active
         ON tracked_symbols (is_active);
-    `)
-    .then(ensureRedditSchemaMigrations)
-    .catch((error: unknown) => {
-      schemaPromise = null;
-      throw error;
-    });
+
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user', 'guest')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_login_at TEXT NOT NULL DEFAULT '',
+        is_active INTEGER NOT NULL DEFAULT 1
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+      CREATE INDEX IF NOT EXISTS idx_users_role ON users (role);
+
+      CREATE TABLE IF NOT EXISTS auth_otp_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT NOT NULL DEFAULT '',
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_auth_otp_codes_email_created
+        ON auth_otp_codes (email, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id
+        ON auth_sessions (user_id);
+    `);
+  await ensureRedditSchemaMigrations();
+  await database.execute({
+    sql: `
+      INSERT OR IGNORE INTO app_schema_migrations (version, applied_at)
+      VALUES (?, ?)
+    `,
+    args: [currentSchemaVersion, new Date().toISOString()],
+  });
+}
+
+export function migrateDatabase(): Promise<void> {
+  schemaPromise ??= (async () => {
+    if (await hasCurrentSchemaVersion()) {
+      return;
+    }
+
+    await applySchemaMigrations();
+  })().catch((error: unknown) => {
+    schemaPromise = null;
+    throw error;
+  });
 
   return schemaPromise;
+}
+
+export function ensureStockSchema(): Promise<void> {
+  return migrateDatabase();
 }

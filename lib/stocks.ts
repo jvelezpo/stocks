@@ -16,6 +16,11 @@ export type PricePoint = {
   price: number;
 };
 
+export type ActiveStockIdentity = {
+  symbol: string;
+  name: string;
+};
+
 export type StockSummary = {
   id: number;
   symbol: string;
@@ -308,7 +313,7 @@ function mapHftAnalysis(row: StockHftAnalysisRow): StockHftAnalysis {
   };
 }
 
-function latestSummarySql(whereClause = ""): string {
+function latestSummarySql(whereClause = "", relatedWhereClause = ""): string {
   return `
     WITH latest_history AS (
       SELECT *
@@ -334,6 +339,7 @@ function latestSummarySql(whereClause = ""): string {
             ORDER BY created_at DESC, id DESC
           ) AS row_number
         FROM stock_analyses
+        ${relatedWhereClause}
       )
       WHERE row_number = 1
     ),
@@ -347,27 +353,32 @@ function latestSummarySql(whereClause = ""): string {
             ORDER BY created_at DESC, id DESC
           ) AS row_number
         FROM stock_hft_analyses
+        ${relatedWhereClause}
       )
       WHERE row_number = 1
     ),
     history_counts AS (
       SELECT symbol, COUNT(*) AS history_count
       FROM stock_history
+      ${relatedWhereClause}
       GROUP BY symbol
     ),
     document_counts AS (
       SELECT symbol, COUNT(*) AS document_count
       FROM stock_documents
+      ${relatedWhereClause}
       GROUP BY symbol
     ),
     analysis_counts AS (
       SELECT symbol, COUNT(*) AS analysis_count
       FROM stock_analyses
+      ${relatedWhereClause}
       GROUP BY symbol
     ),
     hft_counts AS (
       SELECT symbol, COUNT(*) AS hft_count
       FROM stock_hft_analyses
+      ${relatedWhereClause}
       GROUP BY symbol
     )
     SELECT
@@ -406,6 +417,32 @@ function latestSummarySql(whereClause = ""): string {
     LEFT JOIN hft_counts ON hft_counts.symbol = latest_history.symbol
     LEFT JOIN latest_hft_analysis ON latest_hft_analysis.symbol = latest_history.symbol
   `;
+}
+
+export function getActiveStockIdentities(): Promise<ActiveStockIdentity[]> {
+  return withDatabase(async (db) => {
+    return allRows<ActiveStockIdentity>(
+      db,
+      `
+        SELECT
+          tracked.symbol,
+          COALESCE(
+            NULLIF(tracked.display_name, ''),
+            (
+              SELECT history.name
+              FROM stock_history AS history
+              WHERE history.symbol = tracked.symbol
+              ORDER BY history.fetched_at DESC, history.id DESC
+              LIMIT 1
+            ),
+            tracked.symbol
+          ) AS name
+        FROM tracked_symbols AS tracked
+        WHERE tracked.is_active = 1
+        ORDER BY tracked.symbol ASC
+      `
+    );
+  });
 }
 
 export function getStockSummaries(): Promise<StockSummary[]> {
@@ -539,7 +576,10 @@ export async function getStockDetail(symbol: string): Promise<StockDetail | null
       await db.batch(
         [
           {
-            sql: `${latestSummarySql("WHERE symbol = ?")} LIMIT 1`,
+            sql: `${latestSummarySql(
+              "WHERE symbol = ?1",
+              "WHERE symbol = ?1"
+            )} LIMIT 1`,
             args: [normalizedSymbol],
           },
           {

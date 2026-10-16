@@ -1,4 +1,4 @@
-import { getStockSummaries } from "./stocks.ts";
+import { getActiveStockIdentities } from "./stocks.ts";
 import { refreshPolymarketMarketSnapshots } from "./stock-reddit-analysis.ts";
 import { collectorIntervalMs } from "./collector-scheduler.ts";
 
@@ -35,7 +35,7 @@ async function refresh(state: SchedulerState): Promise<void> {
 
   state.running = true;
   try {
-    const stocks = await getStockSummaries();
+    const stocks = await getActiveStockIdentities();
     const result = await refreshPolymarketMarketSnapshots(stocks, 10);
     log(
       `Refreshed ${result.refreshedSymbols} symbols and stored ${result.storedMarkets} markets.`

@@ -397,6 +397,27 @@ function parseStoredOutcomes(
   }
 }
 
+function polymarketSnapshotFingerprint(
+  stockName: string,
+  markets: PolymarketMarketSnapshot[]
+): string {
+  const normalizedMarkets = markets
+    .map((market) => ({
+      event: market.event,
+      market: market.market,
+      outcomes: market.outcomes,
+      volume: market.volume,
+      liquidity: market.liquidity,
+      endDate: market.endDate,
+      sourceUrl: market.sourceUrl,
+    }))
+    .sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right))
+    );
+
+  return JSON.stringify({ stockName, markets: normalizedMarkets });
+}
+
 export async function refreshPolymarketMarketSnapshots(
   stocks: { symbol: string; name: string }[],
   marketsPerStock = 10
@@ -432,8 +453,60 @@ export async function refreshPolymarketMarketSnapshots(
   const capturedAt = new Date().toISOString();
   const statements: InStatement[] = [];
   let storedMarkets = 0;
+  const successfulSymbols = successful.map((result) => result.value.symbol);
+  const existingResult = successfulSymbols.length
+    ? await database.execute({
+        sql: `
+          SELECT
+            snapshot.symbol,
+            snapshot.stock_name,
+            snapshot.event_text,
+            snapshot.market_text,
+            snapshot.outcomes_json,
+            snapshot.volume,
+            snapshot.liquidity,
+            snapshot.end_date,
+            snapshot.source_url
+          FROM polymarket_market_snapshots AS snapshot
+          JOIN json_each(?) AS requested
+            ON CAST(requested.value AS TEXT) = snapshot.symbol
+        `,
+        args: [JSON.stringify(successfulSymbols)],
+      })
+    : null;
+  const existingBySymbol = new Map<string, PolymarketMarketSnapshot[]>();
+  const existingNames = new Map<string, string>();
+
+  for (const row of (existingResult?.rows ?? []) as unknown as PolymarketSnapshotRow[]) {
+    const markets = existingBySymbol.get(row.symbol) ?? [];
+    markets.push({
+      event: row.event_text,
+      market: row.market_text,
+      outcomes: parseStoredOutcomes(row.outcomes_json),
+      volume: row.volume === null ? null : Number(row.volume),
+      liquidity: row.liquidity === null ? null : Number(row.liquidity),
+      endDate: row.end_date,
+      sourceUrl: row.source_url,
+    });
+    existingBySymbol.set(row.symbol, markets);
+    existingNames.set(row.symbol, row.stock_name);
+  }
 
   for (const result of successful) {
+    storedMarkets += result.value.markets.length;
+    const existingFingerprint = polymarketSnapshotFingerprint(
+      existingNames.get(result.value.symbol) ?? result.value.name,
+      existingBySymbol.get(result.value.symbol) ?? []
+    );
+    const nextFingerprint = polymarketSnapshotFingerprint(
+      result.value.name,
+      result.value.markets
+    );
+
+    if (existingFingerprint === nextFingerprint) {
+      continue;
+    }
+
     statements.push({
       sql: "DELETE FROM polymarket_market_snapshots WHERE symbol = ?",
       args: [result.value.symbol],
@@ -468,7 +541,6 @@ export async function refreshPolymarketMarketSnapshots(
           market.sourceUrl,
         ],
       });
-      storedMarkets += 1;
     }
   }
 
@@ -488,45 +560,65 @@ export async function getStoredPolymarketStockMarketGroups(
   }
 
   const boundedLimit = Math.min(Math.max(Math.trunc(marketsPerStock), 1), 10);
-  const allowedSymbols = new Set(stocks.map((stock) => stock.symbol.trim().toUpperCase()));
+  const allowedSymbols = stocks.map((stock) => stock.symbol.trim().toUpperCase());
   await ensureStockSchema();
-  const result = await database.execute(`
-    SELECT
-      symbol,
-      stock_name,
-      event_text,
-      market_text,
-      outcomes_json,
-      volume,
-      liquidity,
-      end_date,
-      source_url
-    FROM polymarket_market_snapshots
-    ORDER BY symbol ASC, volume DESC, id DESC
-  `);
+  const result = await database.execute({
+    sql: `
+      WITH requested_symbols AS (
+        SELECT CAST(value AS TEXT) AS symbol
+        FROM json_each(?)
+      ),
+      ranked_snapshots AS (
+        SELECT
+          snapshot.symbol,
+          snapshot.stock_name,
+          snapshot.event_text,
+          snapshot.market_text,
+          snapshot.outcomes_json,
+          snapshot.volume,
+          snapshot.liquidity,
+          snapshot.end_date,
+          snapshot.source_url,
+          ROW_NUMBER() OVER (
+            PARTITION BY snapshot.symbol
+            ORDER BY snapshot.volume DESC, snapshot.id DESC
+          ) AS row_number
+        FROM polymarket_market_snapshots AS snapshot
+        JOIN requested_symbols USING (symbol)
+      )
+      SELECT
+        symbol,
+        stock_name,
+        event_text,
+        market_text,
+        outcomes_json,
+        volume,
+        liquidity,
+        end_date,
+        source_url
+      FROM ranked_snapshots
+      WHERE row_number <= ?
+      ORDER BY symbol ASC, volume DESC
+    `,
+    args: [JSON.stringify(allowedSymbols), boundedLimit],
+  });
   const groups = new Map<string, PolymarketStockMarketGroup>();
 
   for (const row of result.rows as unknown as PolymarketSnapshotRow[]) {
-    if (!allowedSymbols.has(row.symbol)) {
-      continue;
-    }
-
     const group = groups.get(row.symbol) ?? {
       symbol: row.symbol,
       name: row.stock_name,
       markets: [],
     };
-    if (group.markets.length < boundedLimit) {
-      group.markets.push({
-        event: row.event_text,
-        market: row.market_text,
-        outcomes: parseStoredOutcomes(row.outcomes_json),
-        volume: row.volume === null ? null : Number(row.volume),
-        liquidity: row.liquidity === null ? null : Number(row.liquidity),
-        endDate: row.end_date,
-        sourceUrl: row.source_url,
-      });
-    }
+    group.markets.push({
+      event: row.event_text,
+      market: row.market_text,
+      outcomes: parseStoredOutcomes(row.outcomes_json),
+      volume: row.volume === null ? null : Number(row.volume),
+      liquidity: row.liquidity === null ? null : Number(row.liquidity),
+      endDate: row.end_date,
+      sourceUrl: row.source_url,
+    });
     groups.set(row.symbol, group);
   }
 
